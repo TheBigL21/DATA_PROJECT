@@ -44,7 +44,7 @@ Get TMDb API key:
 - Sign up at https://www.themoviedb.org/
 - Create `config/tmdb_config.json`:
 ```json
-{"api_key": "your_key_here"}
+{"api_key": "a55b214aa396861a2625258556bbc6ee"}
 ```
 
 ### 3. Run Pipeline
@@ -121,18 +121,4 @@ curl -X POST http://localhost:5000/recommend \
 
 See `general.info.md` for complete architecture, algorithms, and implementation details.
 
-## Testing
 
-```bash
-python test_smart_recommendations.py
-```
-
-## Requirements
-
-- Python 3.8+
-- 4GB+ RAM
-- 5GB+ disk space
-
-## License
-
-MIT

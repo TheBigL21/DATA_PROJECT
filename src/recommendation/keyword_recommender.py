@@ -70,8 +70,8 @@ class KeywordRecommender:
         # Generic keywords to potentially exclude
         generic_keywords = {
             'black and white', 'technicolor', 'silent film',
-            'pre-code', 'b movie', 'film noir', 'based on novel or book',
-            'based on play or musical'
+            'pre-code', 'b movie', 'film noir', 'based on play or musical',
+            'woman director', 'female director', 'independent film', 'directorial debut'
         }
 
         if len(genres) == 1:

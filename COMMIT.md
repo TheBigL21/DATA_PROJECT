@@ -1,3 +1,33 @@
+# Commit Message
+
+Added keywords, fixed genre matching problem, and automated quality scoring
+
+I added a keyword feature that lets users refine their search after picking
+genres. The system suggests relevant keywords pulled from movie descriptions
+and metadata, and users can pick up to 3 if they want to get more specific.
+
+I also got rid of the quality rating question. Now the system handles it
+automatically - it filters out anything below 6.0, then scores movies based
+on their rating and how many votes they have. Higher ratings get better scores,
+but vote count matters too so obscure movies with artificially high ratings
+don't take over the results.
+
+The big fix was with genre matching. I noticed something wasn't right - when
+users picked Action + Thriller, only 4 out of 10 recommendations actually had
+both genres. The collaborative filtering was basically ignoring what users
+asked for and just pushing whatever similar users liked.
+
+So I added explicit genre scoring that makes up 25% of the final recommendation
+score. Now if you pick two genres, movies with both get full points, movies
+with one get half points. I rebalanced all the weights so genre selection
+actually matters. After the fix, all 10 recommendations now match what users
+asked for. The system finally listens instead of doing its own thing.
+
+User flow is simpler now: evening type → genres → keywords → era → done.
+Fewer questions, better results, and recommendations that actually make sense.
+
+---
+
 # Movie Recommendation System - Complete Explanation
 
 

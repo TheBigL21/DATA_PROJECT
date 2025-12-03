@@ -12,7 +12,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 
-from recommendation.enhanced_engine import load_system
+from recommendation.smart_engine import load_smart_system
 from analytics.genre_tracker import GenreAnalytics
 from auth.user_auth import authenticate
 from recommendation.keyword_recommender import KeywordRecommender
@@ -244,22 +244,35 @@ def display_recommendations(engine, user_answers, user_data):
     print(f"\nSearching for {', '.join([g.capitalize() for g in user_answers['genres']])} movies...")
     if user_answers.get('keywords'):
         print(f"Keywords: {', '.join([k.capitalize() for k in user_answers['keywords']])}")
-    print(f"Era: {user_answers['age']}")
-    print(f"Quality: {user_answers['quality']}\n")
+    print(f"Era: {user_answers['age']}\n")
 
     # Generate recommendations
     try:
+        # Map age preference to era
+        age_to_era = {
+            "Less than 5 years old": "fresh",
+            "Less than 10 years old": "modern",
+            "Less than 20 years old": "timeless",
+            "Doesn't Matter": "old_school"
+        }
+        era = age_to_era.get(user_answers['age'], "modern")
+
+        # Map evening type to smart engine format
+        evening_map = {
+            "Chill Evening by myself": "chill_evening",
+            "Date night": "date_night",
+            "Family night": "family_night",
+            "Friends night": "friends_night"
+        }
+        evening_type = evening_map.get(user_answers['evening_type'], "chill_evening")
+
         recommendations = engine.recommend(
             user_id=0,
-            evening_type=user_answers['evening_type'],
-            selected_genres=user_answers['genres'],
-            age_preference=user_answers['age'],
-            runtime_pref="Doesn't matter",
-            quality_level=user_answers['quality'],
-            popularity_level="Mix of everything",
+            evening_type=evening_type,
+            genres=user_answers['genres'],
+            era=era,
+            keywords=user_answers.get('keywords', []),
             session_history=[],
-            user_region=user_data.get('region', 'Other'),  # Pass user region
-            selected_keywords=user_answers.get('keywords', []),  # Pass keywords
             top_k=10
         )
 
@@ -268,7 +281,7 @@ def display_recommendations(engine, user_answers, user_data):
         print("="*60 + "\n")
 
         for rank, movie_id in enumerate(recommendations, 1):
-            movie = engine.base_engine.movie_dict[movie_id]
+            movie = engine.movies[engine.movies['movie_id'] == movie_id].iloc[0].to_dict()
             genres_str = ', '.join([g.capitalize() for g in list(movie['genres'])[:3]])
 
             print(f"{rank:2d}. {movie['title']} ({movie['year']})")
@@ -318,7 +331,8 @@ def main():
     try:
         models_dir = Path('./output/models')
         movies_path = Path('./output/processed/movies.parquet')
-        engine = load_system(models_dir, movies_path)
+        keyword_db_path = Path('./output/models/keyword_database.pkl')
+        engine = load_smart_system(models_dir, movies_path, keyword_db_path)
         genre_config = load_genre_config()
         analytics = GenreAnalytics()
         keyword_recommender = KeywordRecommender(str(movies_path))
@@ -334,7 +348,6 @@ def main():
     selected_genres, presented_genres = ask_genres(evening_type, genre_config)
     selected_keywords = ask_keywords(selected_genres, keyword_recommender)
     age_pref = ask_age_preference()
-    quality = ask_quality()
 
     # Log for ML learning
     analytics.log_presentation(evening_type, presented_genres)
@@ -345,8 +358,7 @@ def main():
         'evening_type': evening_type,
         'genres': selected_genres,
         'keywords': selected_keywords,
-        'age': age_pref,
-        'quality': quality
+        'age': age_pref
     }
 
     # STEP 4: Generate and display recommendations (with region-based weighting)

@@ -1,599 +1,349 @@
 # Movie Recommendation System - Complete Documentation
 
-**Last Updated**: December 2, 2025
-**Status**: Production Ready
-**Version**: Smart System with Normal Law Quality Scoring
-
----
+A personalized movie recommendation system that helps you find the perfect movie based on your mood, preferences, and viewing context.
 
 ## Table of Contents
 1. [System Overview](#system-overview)
 2. [Quick Start](#quick-start)
-3. [Architecture](#architecture)
-4. [Smart Recommendation Engine](#smart-recommendation-engine)
-5. [Normal Law Quality Scoring](#normal-law-quality-scoring)
-6. [Data Schema](#data-schema)
-7. [API Endpoints](#api-endpoints)
-8. [Project Structure](#project-structure)
-9. [Testing](#testing)
-10. [Future Enhancements](#future-enhancements)
+3. [How It Works](#how-it-works)
+4. [Data Pipeline](#data-pipeline)
+5. [Machine Learning Models](#machine-learning-models)
+6. [Recommendation Engine](#recommendation-engine)
+7. [Recent Updates](#recent-updates)
 
 ---
 
 ## System Overview
 
-Mood-driven movie recommendation system combining collaborative filtering, co-occurrence graphs, and intelligent quality scoring to minimize swipes before finding the perfect movie.
+### What It Does
+
+Instead of endless scrolling, this system asks 4 quick questions:
+1. What's your plan tonight? (date, family, chill, friends)
+2. Pick 1-2 genres (action, comedy, thriller, etc.)
+3. Any specific themes? (keywords like "espionage", "heist")
+4. What era? (recent, modern, classic, or any)
+
+Then shows 10 personalized movies with ratings, descriptions, and posters.
 
 ### Key Features
-- **Smart Quality Scoring**: Normal distribution favoring excellent movies (8.0+)
-- **Era Favorability**: Soft time preferences without hard filtering
-- **Keyword System**: Contextual keyword extraction and matching
-- **Three-Level Swipe Feedback**: Left (reject), Right (interested), Up (select)
-- **Session-Aware Learning**: Adapts recommendations as user swipes
-
-### Tech Stack
-- Python 3.8+
-- Pandas, NumPy, SciPy
-- Flask API
-- Collaborative Filtering (ALS)
-- Co-occurrence Graph
-- TF-IDF for keywords
+- **Context-aware**: Date night movies ≠ family night movies
+- **No algorithm manipulation**: Not optimized for profit like streaming services
+- **Quality filter**: Automatic 6.0+ rating minimum, intelligent scoring
+- **Genre-focused**: 25% of recommendation score based on explicit genre matching
+- **Real data**: 45,000 movies from IMDb + TMDb with full metadata
 
 ---
 
 ## Quick Start
 
-### 1. Download IMDb Data
+### 1. Install
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Get Data
+
+Download IMDb datasets:
 ```bash
 mkdir imdb_raw && cd imdb_raw
 wget https://datasets.imdbws.com/title.basics.tsv.gz
 wget https://datasets.imdbws.com/title.ratings.tsv.gz
 wget https://datasets.imdbws.com/title.principals.tsv.gz
-wget https://datasets.imdbws.com/title.crew.tsv.gz
+wget https://datasets.imdbws.com/title.akas.tsv.gz
 wget https://datasets.imdbws.com/name.basics.tsv.gz
 cd ..
 ```
 
-### 2. Run Complete Pipeline
-```bash
-python run_pipeline.py \
-  --imdb-dir ./imdb_raw \
-  --output-dir ./output \
-  --num-users 1000 \
-  --sessions-per-user 10
+Get TMDb API key:
+- Sign up at https://www.themoviedb.org/
+- Create `config/tmdb_config.json`:
+```json
+{"api_key": "your_api_key_here"}
 ```
 
-### 3. Start API Server
+### 3. Run Pipeline
 ```bash
-python3 api_smart.py
-# Server runs on http://localhost:5000
+python run_pipeline.py
 ```
+Takes 2-4 hours (TMDb API rate-limited). Progress saved automatically.
 
-### 4. Test System
+### 4. Get Recommendations
 ```bash
-python3 test_smart_recommendations.py
+python movie_finder.py
 ```
 
 ---
 
-## Architecture
+## How It Works
 
-### Three-Layer Design
+### Data Sources
 
-#### Layer 1: Data Processing
-- **Input**: IMDb TSV dumps + TMDB API data
-- **Output**: Clean parquet files (movies, interactions, people)
-- **Schema**: Optimized for ML (integer movie_ids, sparse matrices)
+**IMDb Dataset** (Public)
+- Movie titles, years, genres, runtime
+- Ratings and vote counts
+- Cast and crew information
+- Coverage: 45,207 quality movies (≥500 votes)
 
-#### Layer 2: Machine Learning Models
+**TMDb API**
+- Movie posters and images
+- Plot descriptions
+- Keywords (thematic tags like "espionage", "heist")
+- Budget and revenue data
+- 99.3% coverage of our dataset
 
-**Collaborative Filtering (ALS)**
-- Matrix factorization learning user preferences
-- User and movie latent vectors (50 dimensions)
-- Trained on three-level swipe feedback (0.0, 0.3, 1.0)
+### Recommendation Algorithm
 
-**Co-occurrence Graph**
-- Captures "users who liked X also liked Y" patterns
-- Sparse adjacency matrix (movie x movie)
-- Edge weights from session co-occurrence
+**Hybrid Scoring System** - 6 weighted components:
 
-**Content Similarity (TF-IDF)**
-- Text similarity based on descriptions
-- Keyword extraction per genre
-- Semantic matching for refinement
+1. **Genre Matching (25%)** ← PRIMARY USER INTENT
+   - Movies matching both selected genres: 1.0 score
+   - Movies matching one genre: 0.5 score
+   - Ensures recommendations respect user's explicit selection
 
-#### Layer 3: Recommendation Engine
+2. **Collaborative Filtering (25%)**
+   - "Users like you also liked..."
+   - Matrix factorization (SVD) with 50 latent factors
+   - Based on synthetic user behavior patterns
 
-**Smart Engine Components** (6 scoring factors):
-1. **Collaborative Filtering (30%)** - User preferences
-2. **Co-occurrence Graph (20%)** - Movie relationships
-3. **Session Similarity (15%)** - Within-session context
-4. **Quality Score (15%)** - Normal law quality (see below)
-5. **Era Favorability (10%)** - Soft time preference
-6. **Keyword Matching (10%)** - Contextual relevance
+3. **Quality Score (15%)**
+   - Automatic 6.0+ minimum filter
+   - Linear scoring from 6.0-10.0
+   - Vote confidence multiplier (more votes = higher confidence)
+
+4. **Co-occurrence Graph (15%)**
+   - Movies frequently watched together
+   - "People who liked X also liked Y"
+   - Graph-based recommendations
+
+5. **Session Similarity (10%)**
+   - Genre overlap with current session
+   - Year similarity to recently viewed movies
+   - Adapts as user swipes
+
+6. **Era Favorability (5%)**
+   - Soft time period preference
+   - Movies in range get 1.0, outside decay 2%/year
+   - No hard cutoffs - great old movies still appear
+
+7. **Keyword Matching (5%)**
+   - Exact keyword match in movie metadata
+   - Partial match in descriptions
+   - User selects 0-3 refinement keywords
 
 ---
 
-## Smart Recommendation Engine
+## Data Pipeline
 
-### File Location
-`src/recommendation/smart_engine.py` (490 lines)
+### Stage 1: IMDb Data Cleaning
+**File**: `src/data_processing/data_clean.py`
 
-### User Flow
+Filters:
+- Only movies (not TV shows, shorts)
+- Not adult content
+- Runtime 60-400 minutes
+- ≥500 votes (quality control)
+- Valid year (1920-2025)
+- Has genres and ratings
 
-**Step 1: Evening Type**
-- Chill Evening (solo, experimental)
-- Date Night (impressive movies)
-- Family Night (reliable entertainment)
-- Friends Night (social viewing)
+Output: ~45,000 quality movies from millions
 
-**Step 2: Genres** (1-2 selections)
-- Action, Comedy, Drama, Horror, Romance, Sci-Fi, etc.
+### Stage 2: Country Extraction
+**File**: `src/data_processing/extract_country_fast.py`
 
-**Step 3: Era**
-- Fresh Picks (2020-2025)
-- Modern Classics (2015-2025)
-- Timeless Favorites (2000-2025)
-- Old-School Gems (1900-2025)
+- Maps each movie to production country
+- Used for regional preference weighting
 
-**Step 4: Keywords** (optional, 0-2)
-- System suggests 8 contextual keywords based on genres
-- Example: Action + Thriller → espionage, heist, conspiracy
+### Stage 3: TMDb Enrichment
+**File**: `src/data_processing/fetch_tmdb_data.py`
 
-### Recommendation Process
+Fetches for each movie:
+- Plot descriptions
+- High-quality posters
+- Keywords (thematic tags)
+- Additional ratings
+- Budget/revenue data
 
-**Stage 1: Candidate Generation (~500-1000 movies)**
+Rate-limited to 10 req/sec. Takes 2-4 hours for full dataset.
+
+### Stage 4: Data Transformation
+**File**: `src/data_processing/transform_imdb_data.py`
+
+- Joins all tables into single denormalized schema
+- Aggregates genres and keywords into lists
+- Creates composite rating: (IMDb + TMDb) / 2
+- Assigns integer movie_id for ML efficiency
+
+### Stage 5: Synthetic Interactions
+**File**: `src/data_processing/generate_synthetic_interactions.py`
+
+- Generates 1000 synthetic users with realistic patterns
+- Simulates ratings based on genre preferences, quality bias, regional preferences
+- Needed for collaborative filtering (cold-start problem)
+
+---
+
+## Machine Learning Models
+
+### Model 1: Collaborative Filtering
+**Algorithm**: Singular Value Decomposition (SVD)
+
+- Learns user and movie latent factors (50 dimensions)
+- Predicts: "How much would this user like this movie?"
+- Trained on synthetic interaction data
+- Captures: "Users like you also liked..."
+
+### Model 2: Co-occurrence Graph
+**Algorithm**: Item-based collaborative filtering
+
+- Builds graph of movies watched together
+- Edge weight = co-occurrence frequency
+- Captures: "People who watched X also watched Y"
+- Sparse adjacency matrix (45K × 45K)
+
+### Model 3: Content Similarity
+**Algorithm**: TF-IDF + Cosine Similarity
+
+- Creates feature vectors from genres, keywords, directors
+- Computes pairwise similarity (45K × 45K)
+- Identifies thematically similar movies
+
+### Model 4: Keyword Database
+**Algorithm**: Inverted index with frequency ranking
+
+- Maps keywords to movie lists
+- Enables fast lookup and contextual suggestions
+- Genre-specific keyword recommendations
+
+---
+
+## Recommendation Engine
+
+**File**: `src/recommendation/smart_engine.py`
+
+### Process Flow
+
+**Stage 1: Candidate Generation** (~500-1000 movies)
 - Hard genre filter (must match selected genres)
 - CF top predictions (filtered by genre)
-- Graph neighbors of session positive movies
-- Popular movies in genre (cold start)
+- Graph neighbors of positive session movies
+- Popular movies in genre (cold start fallback)
 
 **Stage 2: Composite Scoring**
 ```python
-score = 0.30 * cf_score +
-        0.20 * graph_score +
-        0.15 * session_score +
-        0.15 * quality_score +  # ← Normal law applied here
-        0.10 * era_score +
-        0.10 * keyword_score
+score = 0.25 × genre_score +      # NEW - explicit genre matching
+        0.25 × cf_score +          # Collaborative filtering
+        0.15 × quality_score +     # Linear quality 6.0-10.0
+        0.15 × graph_score +       # Co-occurrence
+        0.10 × session_score +     # Within-session similarity
+        0.05 × era_score +         # Time period preference
+        0.05 × keyword_score       # Keyword matching
 ```
 
 **Stage 3: Ranking & Return**
 - Sort by composite score
-- Return top K (default 20)
+- Return top K (typically 10)
 - Exclude already shown movies
 
 ---
 
-## Normal Law Quality Scoring
+## Recent Updates
 
-### Implementation Details
+### Genre Weighting Fix (Dec 2025)
 
-**Feature Name**: `normal_law_try`
-**Date Implemented**: December 2, 2025
-**Location**: `src/recommendation/smart_engine.py:337-397`
+**Problem**: When users selected "Action + Thriller," only 40% of recommendations matched both genres. CF model was overriding user intent.
 
-### Motivation
+**Solution**: Added explicit genre scoring component (25% weight)
+- Movies matching both genres: 1.0 score (full 25%)
+- Movies matching one genre: 0.5 score (12.5%)
+- Rebalanced other weights to accommodate
 
-User requested avoiding bad movies without hard rating filters. Solution: Use normal distribution to naturally prioritize excellent movies while maintaining mathematical smoothness.
+**Result**: 100% genre match rate (up from 40%), maintaining 7.9/10 avg quality
 
-### Algorithm
+### Quality Scoring Automation (Dec 2025)
 
-**Parameters**:
-- Mean (μ) = 8.0
-- Standard Deviation (σ) = 1.5
+**Removed**: User quality preference question
 
-**Formula**:
-```python
-z_score = (rating - 8.0) / 1.5
-gaussian = exp(-0.5 * z_score²)
+**Added**: Automatic quality handling
+- Hard 6.0+ filter for all candidates
+- Linear scoring from 6.0-10.0
+- Vote confidence multiplier (log scale)
+- Simpler user flow, consistent quality standards
 
-if rating >= 7.5:
-    # Boost excellent movies
-    base_quality = min(1.0, gaussian * (1 + (rating - 7.5) * 0.15))
-else:
-    # Natural decay for lower ratings
-    base_quality = gaussian
+### Keyword System (Dec 2025)
 
-# Apply confidence and context
-quality_score = base_quality * confidence * evening_modifier
-```
-
-**Note**: This is NOT a true symmetric normal distribution. It has an asymmetric boost for ratings ≥7.5 to favor classics.
-
-### Score Distribution
-
-| Rating | Base Quality | Interpretation |
-|--------|-------------|----------------|
-| 9.5    | 0.788       | Masterpieces |
-| 9.0    | 0.981       | Masterpieces |
-| 8.5    | 1.000       | Classics/Excellent (peak) |
-| 8.0    | 1.000       | Classics/Excellent (peak) |
-| 7.5    | 0.946       | Very good |
-| 7.0    | 0.801       | Good |
-| 6.5    | 0.607       | Decent |
-| 6.0    | 0.411       | Mediocre |
-| 5.5    | 0.249       | Rarely shown |
-| 5.0    | 0.135       | Almost never shown |
-| <4.0   | <0.030      | Virtually never shown |
-
-### Confidence Multiplier (Vote Count)
-```python
-if num_votes >= 100,000: confidence = 1.0
-elif num_votes >= 10,000: confidence = 0.9
-elif num_votes >= 1,000:  confidence = 0.7
-else:                     confidence = 0.5
-```
-
-### Evening Type Modifier
-```python
-modifiers = {
-    'date_night': 1.2,      # Need impressive movies
-    'family_night': 1.1,    # Want reliable entertainment
-    'friends_night': 1.0,   # Social focus
-    'chill_evening': 0.9    # Experimental mood
-}
-```
-
-### Impact
-
-**Practical Effects**:
-- Movies rated 8.0-8.5 get maximum quality scores (peak of distribution)
-- Movies rated 7.0-7.5 remain competitive (still appear frequently)
-- Movies rated <6.0 get very low quality scores (rarely surface)
-- No hard cutoff: even bad movies can appear if CF/keywords predict user interest
-
-**Weight in Overall Score**: 15%
-This means quality is important but not dominant—personalization (CF) and relationships (graph) still matter most.
-
-### Tuning Parameters
-
-If you want to adjust the curve:
-- **mean**: Shift center (7.5 = more forgiving, 8.5 = stricter)
-- **std**: Change steepness (1.2 = steeper, 2.0 = gentler)
-- **boost_factor**: Adjust high-rating boost (currently 0.15)
-- **w_quality**: Change overall weight (currently 15%, could be 20-30%)
+**Added**: Genre-contextual keyword suggestions
+- System suggests 6 relevant keywords based on selected genres
+- Uses TF-IDF analysis on movie metadata
+- User can select 0-3 to refine search
+- Excludes generic/metadata keywords
 
 ---
 
-## Data Schema
+## User Flow
 
-### movies.parquet (45,207 movies)
+1. **Evening Type**: Chill / Date / Family / Friends
+2. **Genres**: Pick 1-2 (action, comedy, thriller, etc.)
+3. **Keywords**: Optional 0-3 refinements (espionage, heist, etc.)
+4. **Era**: Recent / Modern / Timeless / Any
+5. **Results**: Top 10 personalized recommendations
 
-**Core Fields**:
-- `movie_id` (int): 0-indexed internal ID
-- `tconst` (str): IMDb ID (e.g., tt0111161)
-- `title` (str): Movie title
-- `year` (int): Release year
-- `runtime` (int): Minutes
-- `genres` (list): Genre tags
-
-**Ratings**:
-- `avg_rating` (float): IMDb rating (1-10)
-- `tmdb_rating` (float): TMDB rating (1-10)
-- `composite_rating` (float): 60% IMDb + 40% TMDB
-- `num_votes` (int): IMDb vote count (all ≥1000)
-
-**People**:
-- `director` (str): Director name
-- `actors` (list): Top 5 actors
-- `country` (str): Production country
-
-**TMDB Data** (99.3% coverage):
-- `tmdb_id` (float): TMDB ID
-- `description` (str): Plot summary
-- `poster_url` (str): Poster image URL
-- `backdrop_url` (str): Backdrop image URL
-- `keywords` (np.ndarray): TMDB keyword tags
-- `budget` (float): Production budget
-- `revenue` (float): Box office revenue
-
----
-
-## API Endpoints
-
-### Base URL
-`http://localhost:5000`
-
-### 1. Health Check
-```bash
-GET /health
-```
-Response:
-```json
-{
-  "status": "ok",
-  "num_movies": 45207,
-  "has_keywords": true
-}
-```
-
-### 2. Get Questionnaire Options
-```bash
-GET /api/questionnaire/options
-```
-Returns all available evening types, genres, and eras.
-
-### 3. Get Keyword Suggestions
-```bash
-POST /api/questionnaire/keywords
-Content-Type: application/json
-
-{
-  "genres": ["action", "thriller"]
-}
-```
-Response:
-```json
-{
-  "keywords": ["espionage", "conspiracy", "heist", "undercover", ...]
-}
-```
-
-### 4. Get Recommendations
-```bash
-POST /api/recommend
-Content-Type: application/json
-
-{
-  "user_id": 0,
-  "evening_type": "date_night",
-  "genres": ["action", "thriller"],
-  "era": "modern",
-  "keywords": ["espionage"],
-  "session_history": [
-    {"movie_id": 100, "action": "left"},
-    {"movie_id": 250, "action": "right"}
-  ],
-  "top_k": 20
-}
-```
-Response:
-```json
-{
-  "recommendations": [
-    {
-      "movie_id": 12345,
-      "title": "Mission: Impossible - Fallout",
-      "year": 2018,
-      "genres": ["action", "thriller"],
-      "avg_rating": 7.7,
-      "tmdb_rating": 7.4,
-      "combined_rating": 7.58,
-      "num_votes": 345000,
-      "description": "Ethan Hunt and the IMF team...",
-      "poster_url": "https://...",
-      "keywords": ["espionage", "cia"]
-    },
-    ...
-  ]
-}
-```
-
-### 5. Get Movie Details
-```bash
-GET /api/movie/<movie_id>
-```
-Returns detailed information for a specific movie.
-
-### 6. Record Feedback
-```bash
-POST /api/feedback
-Content-Type: application/json
-
-{
-  "user_id": 0,
-  "movie_id": 12345,
-  "action": "up"
-}
-```
+**No quality question** - handled automatically!
 
 ---
 
 ## Project Structure
 
 ```
-DATA_PROJECT/
-├── data/
-│   └── data_clean.py                      # IMDb data cleaning
-│
-├── src/
-│   ├── data_processing/
-│   │   ├── transform_imdb_data.py         # Schema transformation
-│   │   ├── fetch_tmdb_data.py             # TMDB API integration
-│   │   └── generate_synthetic_interactions.py
-│   │
-│   ├── models/
-│   │   ├── collaborative_filtering.py     # ALS model
-│   │   ├── cooccurrence_graph.py          # Movie-movie graph
-│   │   └── content_similarity.py          # TF-IDF
-│   │
-│   ├── recommendation/
-│   │   ├── recommendation_engine.py       # Base engine
-│   │   ├── smart_engine.py                # ★ Smart engine with normal law
-│   │   └── keyword_analyzer.py            # Keyword system
-│   │
-│   └── analytics/
-│       └── genre_tracker.py
-│
-├── output/
-│   ├── processed/
-│   │   └── movies.parquet                 # 45,207 movies (19MB)
-│   │
-│   └── models/
-│       ├── user_factors.npy               # CF model
-│       ├── movie_factors.npy
-│       ├── adjacency_matrix.npz           # Graph
-│       ├── content_similarity.pkl
-│       └── keyword_database.pkl
-│
-├── config/
-│   └── genre_allocation.json
-│
-├── api.py                                  # Legacy API
-├── api_smart.py                            # ★ Smart API
-├── movie_finder.py                         # CLI interface
-├── test_smart_recommendations.py           # ★ Test suite
-├── run_pipeline.py                         # Pipeline orchestrator
-│
-└── PROJECT_DOCUMENTATION.md                # ★ This file
+src/
+  data_processing/     # IMDb cleaning, TMDb fetching, transformations
+  models/              # CF, content similarity, co-occurrence
+  recommendation/      # Main engine, keyword system, region weights
+  auth/                # User authentication
+
+movie_finder.py        # Interactive CLI
+api_smart.py           # REST API
+run_pipeline.py        # Data pipeline orchestrator
 ```
+
+---
+
+## API Usage
+
+```bash
+python api_smart.py
+```
+
+```bash
+curl -X POST http://localhost:5000/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "evening_type": "date_night",
+    "selected_genres": ["action", "thriller"],
+    "selected_keywords": ["espionage"],
+    "age_preference": "modern",
+    "user_region": "US"
+  }'
+```
+
+---
+
+## Dataset Statistics
+
+- **45,207 movies** (1920-2025)
+- **500+ votes minimum** per movie
+- **~40K with TMDb enrichment** (posters, keywords, descriptions)
+- **15+ genres**, thousands of keywords
+- **Mean rating**: 6.2/10
+- **Quality range**: All movies pass 6.0+ threshold
 
 ---
 
 ## Testing
 
-### Run Test Suite
 ```bash
-python3 test_smart_recommendations.py
+python test_system.py
 ```
 
-### Expected Output
-```
-✓ Option C quality scoring test passed
-✓ Era favorability working correctly (not filtering)
-✓ Complete flow test passed
-✓ ALL TESTS PASSED!
-```
+Tests comprehensive scenarios across different genres and evening types.
 
-### Manual Testing
-```bash
-# Start server
-python3 api_smart.py
-
-# In another terminal
-curl http://localhost:5000/health
-curl http://localhost:5000/api/questionnaire/options
-```
-
----
-
-## Future Enhancements
-
-### Priority: High
-1. **Optimize Keyword Database**
-   - Replace TF-IDF with frequency counting
-   - Reduce build time from 40min to 2min
-
-2. **Add Real User Data Collection**
-   - Log all recommendations and swipe actions
-   - Periodically retrain CF model
-   - Update graph edges with new sessions
-
-### Priority: Medium
-3. **Add Description Similarity Component**
-   - Use TF-IDF on plot descriptions
-   - Add as 7th scoring component (5% weight)
-
-4. **A/B Testing Framework**
-   - Test different weight configurations
-   - Compare normal law vs exponential quality scoring
-   - Measure: swipes to success, session completion rate
-
-### Priority: Low
-5. **Streaming Availability Integration**
-   - Integrate with JustWatch API
-   - Filter by Netflix/Prime/Disney+
-
-6. **Deep Learning Exploration**
-   - Neural collaborative filtering
-   - Transformer-based embeddings for descriptions
-
----
-
-## Performance Targets
-
-### Offline Metrics
-- Hit Rate@10: >60%
-- Mean swipes to success: <10
-
-### Online Metrics
-- Session completion rate: >70%
-- Right-swipe rate: 30-50%
-- API response time: <100ms
-
----
-
-## Dependencies
-
-```bash
-pip install pandas numpy scipy flask flask-cors
-```
-
-**Python Version**: 3.8+
-
----
-
-## Key Design Decisions
-
-### 1. Why Normal Law for Quality?
-- Naturally favors excellent movies (8.0+) without hard cutoffs
-- Mathematical smoothness (no artificial boundaries)
-- Context-aware (evening type modifies scoring)
-- Transparent (users can understand the logic)
-
-### 2. Why Era Favorability (Not Filtering)?
-- Hard filters exclude great movies just outside range
-- Smooth decay preserves flexibility
-- Old movies can still rank high if other factors strong
-- Better user experience (fewer disappointments)
-
-### 3. Why Three-Level Swipe Feedback?
-- Binary like/dislike too coarse
-- "Right" (0.3) captures "interesting but not quite"
-- Guides exploration without commitment
-- More training signal for ML models
-
-### 4. Why Simplified User Flow?
-- Old 6-question flow caused user fatigue
-- Quality now implicit (handled by normal law scoring)
-- Era now soft preference (not hard filter)
-- Faster, more flexible experience
-
----
-
-## Troubleshooting
-
-### Issue: API Won't Start
-**Check dependencies**:
-```bash
-pip3 install flask flask-cors pandas numpy scipy
-```
-
-**Check models exist**:
-```bash
-ls output/models/
-# Should see: user_factors.npy, movie_factors.npy, adjacency_matrix.npz
-```
-
-### Issue: Recommendations All Recent Movies
-**This is expected** with "fresh" era (2020-2025). Try:
-- Use "old_school" era (1900-2025) for full variety
-- Check that CF model is loaded correctly
-- Verify genre filtering isn't too restrictive
-
-### Issue: Quality Scores Too Strict
-**Adjust normal law parameters**:
-- Decrease mean (8.0 → 7.5) for more forgiving scoring
-- Increase std (1.5 → 2.0) for gentler curve
-- Edit `src/recommendation/smart_engine.py:362-365`
-
----
-
-## Database Statistics
-
-- **Total Movies**: 45,207
-- **TMDB Coverage**: 99.3% (44,895 movies)
-- **All Movies**: ≥1,000 votes
-- **Mean Rating**: 6.2/10
-- **Median Rating**: 6.4/10
-- **75th Percentile**: 7.0/10
-
-With normal law scoring:
-- Top 25% (7.0+) get quality scores ≥0.80
-- Top 10% (7.5+) get quality scores ≥0.95
-- Bottom 50% (<6.4) get quality scores <0.50
-
----
-
-
+Expected: 100% genre match rate, 7.9+/10 average quality

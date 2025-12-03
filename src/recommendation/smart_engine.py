@@ -58,12 +58,13 @@ class SmartRecommendationEngine:
         self.keyword_analyzer = keyword_analyzer
 
         # Scoring weights
-        self.w_cf = 0.30            # Collaborative filtering
-        self.w_graph = 0.20         # Co-occurrence graph
-        self.w_session = 0.15       # Session similarity
+        self.w_genre = 0.25         # Explicit genre matching (NEW - primary user intent)
+        self.w_cf = 0.25            # Collaborative filtering (reduced from 0.30)
+        self.w_graph = 0.15         # Co-occurrence graph (reduced from 0.20)
         self.w_quality = 0.15       # Option C quality score
-        self.w_era = 0.10           # Era favorability
-        self.w_keywords = 0.10      # Keyword matching
+        self.w_session = 0.10       # Session similarity (reduced from 0.15)
+        self.w_era = 0.05           # Era favorability (reduced from 0.10)
+        self.w_keywords = 0.05      # Keyword matching (reduced from 0.10)
 
     def recommend(
         self,
@@ -145,11 +146,12 @@ class SmartRecommendationEngine:
         """
         candidates = set()
 
-        # Source 1: Genre filtering (hard constraint)
+        # Source 1: Genre filtering (hard constraint) + 6.0 rating floor
         genre_mask = self.movies['genres'].apply(
             lambda g: any(genre in g for genre in genres) if isinstance(g, (list, np.ndarray)) else False
         )
-        genre_movies = self.movies[genre_mask]
+        rating_mask = self.movies['avg_rating'] >= 6.0
+        genre_movies = self.movies[genre_mask & rating_mask]
         candidates.update(genre_movies['movie_id'].tolist())
 
         # Source 2: CF top predictions
@@ -208,30 +210,72 @@ class SmartRecommendationEngine:
         n_candidates = len(candidates)
         scores = np.zeros(n_candidates)
 
-        # Component 1: Collaborative Filtering (30%)
+        # Component 1: Explicit Genre Matching (25%) - NEW
+        genre_scores = self._get_genre_scores(candidates, genres)
+        scores += self.w_genre * genre_scores
+
+        # Component 2: Collaborative Filtering (25%)
         cf_scores = self._get_cf_scores(candidates, user_id)
         scores += self.w_cf * cf_scores
 
-        # Component 2: Graph similarity (20%)
+        # Component 3: Graph similarity (15%)
         graph_scores = self._get_graph_scores(candidates, session_positive_movies)
         scores += self.w_graph * graph_scores
-
-        # Component 3: Session similarity (15%)
-        session_scores = self._get_session_scores(candidates, genres, session_positive_movies)
-        scores += self.w_session * session_scores
 
         # Component 4: Quality score - Option C (15%)
         quality_scores = self._get_quality_scores(candidates, evening_type)
         scores += self.w_quality * quality_scores
 
-        # Component 5: Era favorability (10%)
+        # Component 5: Session similarity (10%)
+        session_scores = self._get_session_scores(candidates, genres, session_positive_movies)
+        scores += self.w_session * session_scores
+
+        # Component 6: Era favorability (5%)
         era_scores = self._get_era_scores(candidates, era)
         scores += self.w_era * era_scores
 
-        # Component 6: Keyword matching (10%)
+        # Component 7: Keyword matching (5%)
         if keywords:
             keyword_scores = self._get_keyword_scores(candidates, keywords)
             scores += self.w_keywords * keyword_scores
+
+        return scores
+
+    def _get_genre_scores(self, candidates: pd.DataFrame, selected_genres: List[str]) -> np.ndarray:
+        """
+        Calculate explicit genre matching scores (0-1 normalized).
+
+        Scoring:
+        - Both selected genres match: 1.0
+        - One selected genre matches: 0.5
+        - No match: 0.0 (but already filtered out in candidate generation)
+
+        Args:
+            candidates: DataFrame of candidate movies
+            selected_genres: List of 1-2 genres selected by user
+
+        Returns:
+            Array of genre match scores (0-1)
+        """
+        scores = np.zeros(len(candidates))
+        selected_set = {g.lower() for g in selected_genres}
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            movie_genres = {g.lower() for g in row['genres']} if isinstance(row['genres'], (list, np.ndarray)) else set()
+
+            matches = len(movie_genres & selected_set)
+
+            if len(selected_genres) == 1:
+                # Single genre: binary match
+                scores[idx] = 1.0 if matches > 0 else 0.0
+            else:
+                # Two genres: 1.0 for both, 0.5 for one, 0.0 for none
+                if matches >= 2:
+                    scores[idx] = 1.0
+                elif matches == 1:
+                    scores[idx] = 0.5
+                else:
+                    scores[idx] = 0.0
 
         return scores
 
@@ -341,58 +385,28 @@ class SmartRecommendationEngine:
         evening_type: str
     ) -> float:
         """
-        normal_law_try: Normal distribution quality scoring (centered at 7.5-8.0).
+        Linear quality scoring with 6.0 floor and smooth confidence curve.
 
-        Uses a normal (Gaussian) distribution to:
-        - Prioritize excellent movies (8.0+) and classics
-        - Still show good movies (7.0-7.9)
-        - Naturally exclude bad movies (<6.0) with very low probability
-        - Maintain smooth mathematical curve (no hard cutoffs)
+        Candidates already filtered at 6.0, so this spreads them 0.0-1.0:
+        - 6.0 rating → 0.0 quality score (minimum acceptable)
+        - 7.0 rating → 0.25 quality score
+        - 8.0 rating → 0.50 quality score
+        - 9.0 rating → 0.75 quality score
+        - 10.0 rating → 1.0 quality score
 
         Returns score between 0.0 and 1.0
         """
-        # Step 1: Normal distribution around mean=8.0, std=1.5
-        # This creates a bell curve where:
-        # - 9.0+ rating → ~1.0 score (masterpieces)
-        # - 8.0-8.5 rating → ~0.95-1.0 score (classics/excellent)
-        # - 7.0-7.5 rating → ~0.75-0.90 score (very good movies)
-        # - 6.5 rating → ~0.55 score (decent movies)
-        # - 6.0 rating → ~0.35 score (mediocre)
-        # - 5.5 rating → ~0.20 score (rarely shown)
-        # - <5.0 rating → ~0.05 score (almost never shown)
+        # Step 1: Linear quality (6.0 → 0.0, 10.0 → 1.0)
+        base_quality = (combined_rating - 6.0) / 4.0
+        base_quality = max(0.0, min(1.0, base_quality))
 
-        mean = 8.0
-        std = 1.5
+        # Step 2: Smooth confidence multiplier (log-scale)
+        import numpy as np
+        confidence = np.log1p(num_votes) / np.log1p(2_000_000)
+        confidence = max(0.3, min(1.0, confidence))  # Floor at 0.3, cap at 1.0
 
-        # Calculate Gaussian probability
-        import math
-        z_score = (combined_rating - mean) / std
-        gaussian = math.exp(-0.5 * z_score**2)
-
-        # Normalize and boost high ratings
-        if combined_rating >= 7.5:
-            # Strong boost for excellent movies (7.5+)
-            base_quality = min(1.0, gaussian * (1 + (combined_rating - 7.5) * 0.15))
-        else:
-            # Below 7.5: use pure gaussian (natural decay)
-            base_quality = gaussian
-
-        # Step 2: Confidence multiplier
-        if num_votes >= 100000:
-            confidence = 1.0
-        elif num_votes >= 10000:
-            confidence = 0.9
-        elif num_votes >= 1000:
-            confidence = 0.7
-        else:
-            confidence = 0.5
-
-        # Step 3: Evening type modifier
-        modifier = self.EVENING_MODIFIERS.get(evening_type, 1.0)
-
-        # Step 4: Combine
-        quality_score = base_quality * confidence * modifier
-        quality_score = min(1.0, quality_score)
+        # Step 3: Combine (no evening modifier - quality is quality)
+        quality_score = base_quality * confidence
 
         return quality_score
 
@@ -430,11 +444,22 @@ class SmartRecommendationEngine:
 
         Checks both TMDB keywords and descriptions.
         """
+        # Filter out metadata keywords that shouldn't affect recommendations
+        metadata_keywords = {
+            'woman director', 'female director', 'male director',
+            'directorial debut', 'independent film', 'film debut'
+        }
+
+        filtered_keywords = [kw for kw in selected_keywords if kw.lower() not in metadata_keywords]
+
+        if not filtered_keywords:
+            return np.zeros(len(candidates))
+
         scores = np.zeros(len(candidates))
 
         for idx, (_, row) in enumerate(candidates.iterrows()):
             movie_dict = row.to_dict()
-            scores[idx] = calculate_keyword_match_score(movie_dict, selected_keywords)
+            scores[idx] = calculate_keyword_match_score(movie_dict, filtered_keywords)
 
         return scores
 
