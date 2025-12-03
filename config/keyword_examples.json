@@ -1,0 +1,134 @@
+{
+  "single_genres": {
+    "action": [
+      "world war ii",
+      "based on comic",
+      "superhero",
+      "murder",
+      "revenge",
+      "sword fight"
+    ],
+    "comedy": [
+      "musical",
+      "screwball comedy",
+      "new york city",
+      "love",
+      "marriage",
+      "romcom"
+    ],
+    "drama": [
+      "murder",
+      "world war ii",
+      "19th century",
+      "new york city",
+      "love",
+      "biography"
+    ],
+    "horror": [
+      "murder",
+      "monster",
+      "scientist",
+      "mad scientist",
+      "vampire",
+      "sequel"
+    ],
+    "thriller": [
+      "murder",
+      "world war ii",
+      "london, england",
+      "detective",
+      "gangster",
+      "new york city"
+    ],
+    "romance": [
+      "musical",
+      "love",
+      "new york city",
+      "screwball comedy",
+      "world war ii",
+      "marriage"
+    ],
+    "sci-fi": [
+      "monster",
+      "scientist",
+      "mad scientist",
+      "alien",
+      "murder",
+      "space"
+    ],
+    "fantasy": [
+      "musical",
+      "monster",
+      "magic",
+      "ghost",
+      "devil",
+      "castle"
+    ],
+    "crime": [
+      "murder",
+      "gangster",
+      "new york city",
+      "police",
+      "prison",
+      "detective"
+    ],
+    "adventure": [
+      "world war ii",
+      "19th century",
+      "pirate",
+      "swashbuckler",
+      "sword fight",
+      "jungle"
+    ]
+  },
+  "combinations": {
+    "action+thriller": [
+      "murder",
+      "world war ii",
+      "gangster",
+      "new york city",
+      "based on comic",
+      "revenge"
+    ],
+    "comedy+romance": [
+      "musical",
+      "screwball comedy",
+      "love",
+      "new york city",
+      "marriage",
+      "murder"
+    ],
+    "sci-fi+horror": [
+      "murder",
+      "monster",
+      "scientist",
+      "mad scientist",
+      "alien",
+      "sequel"
+    ],
+    "drama+crime": [
+      "murder",
+      "world war ii",
+      "gangster",
+      "new york city",
+      "19th century",
+      "love"
+    ],
+    "fantasy+adventure": [
+      "world war ii",
+      "musical",
+      "magic",
+      "murder",
+      "monster",
+      "villain"
+    ],
+    "horror+mystery": [
+      "murder",
+      "monster",
+      "scientist",
+      "detective",
+      "mad scientist",
+      "vampire"
+    ]
+  }
+}
