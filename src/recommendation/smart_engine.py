@@ -11,13 +11,20 @@ New recommendation system with:
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from recommendation.recommendation_engine import RecommendationEngine
 from recommendation.keyword_analyzer import KeywordAnalyzer, calculate_keyword_match_score
+from recommendation.inference_engine import (
+    build_user_model,
+    calculate_popularity_boost,
+    infer_pacing_from_session
+)
+from recommendation.time_period_filter import TimePeriodFilter
+from recommendation.source_material_filter import SourceMaterialFilter
 
 
 class SmartRecommendationEngine:
@@ -57,35 +64,40 @@ class SmartRecommendationEngine:
         self.movies = base_engine.movies
         self.keyword_analyzer = keyword_analyzer
 
-        # Scoring weights
-        self.w_genre = 0.25         # Explicit genre matching (NEW - primary user intent)
-        self.w_cf = 0.25            # Collaborative filtering (reduced from 0.30)
-        self.w_graph = 0.15         # Co-occurrence graph (reduced from 0.20)
-        self.w_quality = 0.15       # Option C quality score
-        self.w_session = 0.10       # Session similarity (reduced from 0.15)
-        self.w_era = 0.05           # Era favorability (reduced from 0.10)
-        self.w_keywords = 0.05      # Keyword matching (reduced from 0.10)
+        # Base scoring weights (when NO keywords selected)
+        self.w_genre_base = 0.30
+        self.w_cf_base = 0.30
+        self.w_graph_base = 0.05
+        self.w_quality_base = 0.20
+        self.w_session_base = 0.15
+
+        # Scoring weights with keywords
+        self.w_genre_kw = 0.25      # Genre matching (primary user intent)
+        self.w_keywords = 0.30      # INCREASED - keyword matching is now primary
+        self.w_cf_kw = 0.20         # Collaborative filtering
+        self.w_quality_kw = 0.15    # Quality score (dynamically adjusted)
+        self.w_session_kw = 0.10    # Session similarity
 
     def recommend(
         self,
         user_id: int,
-        evening_type: str,
         genres: List[str],
-        era: str,
-        keywords: Optional[List[str]] = None,
+        era: Optional[str] = None,
+        source_material: Optional[str] = None,
+        themes: Optional[List[str]] = None,
         session_history: Optional[List[Dict]] = None,
         top_k: int = 20
     ) -> List[int]:
         """
-        Generate recommendations with smart scoring.
+        Generate recommendations with new filtering system.
 
         Args:
             user_id: User ID
-            evening_type: 'date_night', 'family_night', 'friends_night', 'chill_evening'
             genres: List of 1-2 selected genres
-            era: 'fresh', 'modern', 'timeless', 'old_school'
-            keywords: Optional list of 0-2 selected keywords
-            session_history: List of {movie_id, action} dicts
+            era: Selected time period ('recent', 'modern', 'any', etc.)
+            source_material: Source material preference ('book', 'true_story', 'any', etc.)
+            themes: List of thematic keywords selected by user
+            session_history: List of {movie_id, action, num_votes, pacing_score} dicts
             top_k: Number of recommendations to return
 
         Returns:
@@ -93,8 +105,12 @@ class SmartRecommendationEngine:
         """
         if session_history is None:
             session_history = []
-        if keywords is None:
-            keywords = []
+        if themes is None:
+            themes = []
+        if era is None:
+            era = 'any'
+        if source_material is None:
+            source_material = 'any'
 
         # Extract session context
         session_positive = [
@@ -103,28 +119,36 @@ class SmartRecommendationEngine:
         ]
         already_shown = [item['movie_id'] for item in session_history]
 
-        # STAGE 1: Generate candidates with genre filtering only
+        # STAGE 1: Generate candidates
         candidates = self._generate_candidates(
             user_id=user_id,
             genres=genres,
+            quality_floor=7.0,  # Base quality floor
             session_positive_movies=session_positive,
             already_shown=already_shown
         )
 
         if len(candidates) < top_k:
-            # Not enough candidates, relax filters
+            # Not enough candidates, relax quality filter
             print(f"Warning: Only {len(candidates)} candidates found, relaxing filters...")
-            candidates = self.movies[~self.movies['movie_id'].isin(already_shown)]
+            candidates = self._generate_candidates(
+                user_id=user_id,
+                genres=genres,
+                quality_floor=6.0,  # Fallback to minimum quality
+                session_positive_movies=session_positive,
+                already_shown=already_shown
+            )
 
         # STAGE 2: Score all candidates
-        scores = self._score_candidates(
+        scores = self._score_candidates_new(
             candidates=candidates,
             user_id=user_id,
-            evening_type=evening_type,
             genres=genres,
             era=era,
-            keywords=keywords,
-            session_positive_movies=session_positive
+            source_material=source_material,
+            themes=themes,
+            session_positive_movies=session_positive,
+            session_history=session_history
         )
 
         # STAGE 3: Sort and return top K
@@ -135,22 +159,24 @@ class SmartRecommendationEngine:
         self,
         user_id: int,
         genres: List[str],
+        quality_floor: float,
         session_positive_movies: List[int],
         already_shown: List[int]
     ) -> pd.DataFrame:
         """
-        Generate candidate movies using HARD GENRE FILTER ONLY.
-        No quality or era filtering (those are scoring components).
+        Generate candidate movies using genre + quality filtering.
+
+        Quality floor is inferred from user's keyword selections.
 
         Returns ~500-1000 candidates.
         """
         candidates = set()
 
-        # Source 1: Genre filtering (hard constraint) + 6.0 rating floor
+        # Source 1: Genre filtering (hard constraint) + inferred quality floor
         genre_mask = self.movies['genres'].apply(
             lambda g: any(genre in g for genre in genres) if isinstance(g, (list, np.ndarray)) else False
         )
-        rating_mask = self.movies['avg_rating'] >= 6.0
+        rating_mask = self.movies['avg_rating'] >= quality_floor
         genre_movies = self.movies[genre_mask & rating_mask]
         candidates.update(genre_movies['movie_id'].tolist())
 
@@ -195,49 +221,90 @@ class SmartRecommendationEngine:
         self,
         candidates: pd.DataFrame,
         user_id: int,
-        evening_type: str,
         genres: List[str],
-        era: str,
-        keywords: List[str],
-        session_positive_movies: List[int]
+        selected_keywords: Dict[str, Any],
+        user_model: Dict[str, Any],
+        session_positive_movies: List[int],
+        session_history: List[Dict]
     ) -> np.ndarray:
         """
-        Score all candidates using weighted components.
+        Score all candidates using weighted components with inference.
 
         Returns:
             Array of scores (one per candidate)
         """
         n_candidates = len(candidates)
+
+        # Determine if keywords were selected
+        has_keywords = (
+            selected_keywords.get('age') or
+            selected_keywords.get('general') or
+            selected_keywords.get('adaptation') or
+            selected_keywords.get('pacing')
+        )
+
+        # Select weights based on keyword usage
+        if has_keywords:
+            w_genre = self.w_genre_kw
+            w_keywords = self.w_keywords
+            w_cf = self.w_cf_kw
+            w_quality = user_model['quality']['quality_weight']  # Dynamic
+            w_session = self.w_session_kw + (0.05 if len(session_history) >= 5 else 0)
+            w_graph = 0.05
+        else:
+            w_genre = self.w_genre_base
+            w_keywords = 0.0
+            w_cf = self.w_cf_base
+            w_quality = self.w_quality_base
+            w_session = self.w_session_base
+            w_graph = self.w_graph_base
+
+        # Normalize weights
+        total_w = w_genre + w_keywords + w_cf + w_quality + w_session + w_graph
+        w_genre /= total_w
+        w_keywords /= total_w
+        w_cf /= total_w
+        w_quality /= total_w
+        w_session /= total_w
+        w_graph /= total_w
+
+        # Calculate component scores
         scores = np.zeros(n_candidates)
 
-        # Component 1: Explicit Genre Matching (25%) - NEW
+        # Component 1: Genre matching
         genre_scores = self._get_genre_scores(candidates, genres)
-        scores += self.w_genre * genre_scores
+        scores += w_genre * genre_scores
 
-        # Component 2: Collaborative Filtering (25%)
+        # Component 2: Keyword matching (if keywords selected)
+        if has_keywords:
+            keyword_scores = self._get_keyword_scores_enhanced(
+                candidates,
+                selected_keywords,
+                user_model['pacing']
+            )
+            scores += w_keywords * keyword_scores
+
+        # Component 3: Collaborative Filtering
         cf_scores = self._get_cf_scores(candidates, user_id)
-        scores += self.w_cf * cf_scores
+        scores += w_cf * cf_scores
 
-        # Component 3: Graph similarity (15%)
+        # Component 4: Quality score
+        quality_scores = self._get_quality_scores_simple(candidates)
+        scores += w_quality * quality_scores
+
+        # Component 5: Session similarity (with pacing awareness)
+        session_scores = self._get_session_scores_enhanced(
+            candidates,
+            genres,
+            session_positive_movies,
+            session_history,
+            user_model['pacing']
+        )
+        scores += w_session * session_scores
+
+        # Component 6: Graph similarity
         graph_scores = self._get_graph_scores(candidates, session_positive_movies)
-        scores += self.w_graph * graph_scores
-
-        # Component 4: Quality score - Option C (15%)
-        quality_scores = self._get_quality_scores(candidates, evening_type)
-        scores += self.w_quality * quality_scores
-
-        # Component 5: Session similarity (10%)
-        session_scores = self._get_session_scores(candidates, genres, session_positive_movies)
-        scores += self.w_session * session_scores
-
-        # Component 6: Era favorability (5%)
-        era_scores = self._get_era_scores(candidates, era)
-        scores += self.w_era * era_scores
-
-        # Component 7: Keyword matching (5%)
-        if keywords:
-            keyword_scores = self._get_keyword_scores(candidates, keywords)
-            scores += self.w_keywords * keyword_scores
+        scores += w_graph * graph_scores
 
         return scores
 
@@ -463,6 +530,227 @@ class SmartRecommendationEngine:
 
         return scores
 
+    def _get_keyword_scores_enhanced(
+        self,
+        candidates: pd.DataFrame,
+        selected_keywords: Dict[str, Any],
+        pacing_pref: Optional[str]
+    ) -> np.ndarray:
+        """
+        Calculate enhanced keyword scores with age, general, adaptation, and pacing.
+
+        Breakdown:
+        - Age (35% of keyword score)
+        - General keywords (40%)
+        - Pacing (15%)
+        - Adaptation (10%)
+        """
+        scores = np.zeros(len(candidates))
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            components = []
+
+            # Age component (35%)
+            if selected_keywords.get('age'):
+                age_score = calculate_age_score(row['year'], selected_keywords['age'])
+                components.append(age_score * 0.35)
+
+            # General keywords component (40%)
+            if selected_keywords.get('general'):
+                general_score = self._match_general_keywords(row, selected_keywords['general'])
+                components.append(general_score * 0.40)
+
+            # Pacing component (15%)
+            if selected_keywords.get('pacing'):
+                # Extract pacing keyword value
+                pacing_kw = selected_keywords['pacing']
+                if isinstance(pacing_kw, list) and len(pacing_kw) > 0:
+                    pacing_kw = pacing_kw[0]
+                pacing_score = calculate_pacing_match(row, pacing_kw)
+                components.append(pacing_score * 0.15)
+
+            # Adaptation component (10%)
+            if selected_keywords.get('adaptation'):
+                adaptation_score = 1.0 if row.get('is_book_adaptation', False) else 0.0
+                components.append(adaptation_score * 0.10)
+
+            # Average components (only if any keywords selected)
+            if components:
+                scores[idx] = sum(components)
+
+        return scores
+
+    def _match_general_keywords(self, movie_row: pd.Series, user_keywords: List[str]) -> float:
+        """
+        Match movie against user's general keyword selections.
+        Multi-level matching: exact, partial, description.
+        """
+        if not user_keywords:
+            return 0.0
+
+        movie_keywords = movie_row.get('keywords', [])
+        description = movie_row.get('description', '')
+
+        # Check if movie_keywords is empty (handle both lists and numpy arrays)
+        has_keywords = False
+        if isinstance(movie_keywords, (list, np.ndarray)):
+            has_keywords = len(movie_keywords) > 0
+
+        if not has_keywords and not description:
+            return 0.0
+
+        match_scores = []
+
+        for user_kw in user_keywords:
+            # Level 1: Exact match in TMDb keywords
+            if has_keywords and isinstance(movie_keywords, (list, np.ndarray)):
+                exact_match = any(
+                    user_kw.lower() == str(movie_kw).lower()
+                    for movie_kw in movie_keywords
+                )
+
+                if exact_match:
+                    match_scores.append(1.0)
+                    continue
+
+                # Level 2: Partial match in TMDb keywords
+                partial_match = any(
+                    user_kw.lower() in str(movie_kw).lower() or str(movie_kw).lower() in user_kw.lower()
+                    for movie_kw in movie_keywords
+                )
+
+                if partial_match:
+                    match_scores.append(0.7)
+                    continue
+
+            # Level 3: Description match
+            if description:
+                user_kw_formatted = user_kw.replace('_', ' ').lower()
+                if user_kw_formatted in description.lower():
+                    match_scores.append(0.4)
+                    continue
+
+            # No match
+            match_scores.append(0.0)
+
+        # Average match score
+        return sum(match_scores) / len(user_keywords) if match_scores else 0.0
+
+    def _get_quality_scores_simple(self, candidates: pd.DataFrame) -> np.ndarray:
+        """
+        Simplified quality scoring without evening modifiers.
+        Uses Option C formula: base_quality * confidence
+        """
+        scores = np.zeros(len(candidates))
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            # Base quality (rating normalized to 0-1)
+            combined_rating = row['avg_rating']
+            base_quality = (combined_rating - 6.0) / 4.0
+            base_quality = max(0.0, min(1.0, base_quality))
+
+            # Confidence based on vote count
+            num_votes = row['num_votes']
+            confidence = np.log1p(num_votes) / np.log1p(2_000_000)
+            confidence = max(0.3, min(1.0, confidence))
+
+            scores[idx] = base_quality * confidence
+
+        return scores
+
+    def _get_session_scores_enhanced(
+        self,
+        candidates: pd.DataFrame,
+        genres: List[str],
+        session_positive_movies: List[int],
+        session_history: List[Dict],
+        pacing_pref: Optional[str]
+    ) -> np.ndarray:
+        """
+        Enhanced session scoring with pacing awareness.
+        """
+        if not session_positive_movies:
+            return np.ones(len(candidates)) * 0.5
+
+        # Get liked movies data
+        liked_movies = [
+            item for item in session_history
+            if item.get('action') in ['right', 'up']
+        ]
+
+        if not liked_movies:
+            return np.ones(len(candidates)) * 0.5
+
+        # Extract patterns from liked movies
+        liked_genres = set()
+        liked_years = []
+        liked_pacing = []
+
+        for item in liked_movies:
+            movie_id = item['movie_id']
+            movie_data = self.movies[self.movies['movie_id'] == movie_id]
+
+            if len(movie_data) > 0:
+                movie = movie_data.iloc[0]
+                if isinstance(movie.get('genres'), (list, np.ndarray)):
+                    liked_genres.update(movie['genres'])
+                liked_years.append(movie['year'])
+
+                if 'pacing_score' in item:
+                    liked_pacing.append(item['pacing_score'])
+
+        avg_year = np.mean(liked_years) if liked_years else 2015
+
+        # Score candidates
+        scores = np.zeros(len(candidates))
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            score = 0.0
+
+            # Genre overlap (40%)
+            if liked_genres:
+                movie_genres = set(row['genres']) if isinstance(row.get('genres'), (list, np.ndarray)) else set()
+                overlap = len(movie_genres & liked_genres) / len(liked_genres)
+                score += overlap * 0.4
+
+            # Year similarity (30%)
+            year_diff = abs(row['year'] - avg_year)
+            year_score = max(0, 1.0 - (year_diff / 20))
+            score += year_score * 0.3
+
+            # Pacing similarity (30%)
+            if pacing_pref:
+                # Use inferred pacing preference
+                movie_pacing = row.get('pacing_score', 0.5)
+
+                if pacing_pref == 'fast' and movie_pacing > 0.7:
+                    score += 0.3
+                elif pacing_pref == 'slow' and movie_pacing < 0.4:
+                    score += 0.3
+                else:
+                    score += 0.1
+            else:
+                score += 0.15
+
+            scores[idx] = score
+
+        return scores
+
+    def _calculate_popularity_boosts(
+        self,
+        candidates: pd.DataFrame,
+        popularity_mode: str
+    ) -> np.ndarray:
+        """
+        Calculate popularity boost multipliers.
+        """
+        boosts = np.zeros(len(candidates))
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            boosts[idx] = calculate_popularity_boost(row['num_votes'], popularity_mode)
+
+        return boosts
+
     def suggest_keywords(self, genres: List[str], num_keywords: int = 8) -> List[str]:
         """
         Suggest contextual keywords based on selected genres.
@@ -478,6 +766,85 @@ class SmartRecommendationEngine:
             return []
 
         return self.keyword_analyzer.suggest_keywords(genres, num_keywords)
+
+    def _score_candidates_new(
+        self,
+        candidates: pd.DataFrame,
+        user_id: int,
+        genres: List[str],
+        era: str,
+        source_material: str,
+        themes: List[str],
+        session_positive_movies: List[int],
+        session_history: List[Dict]
+    ) -> np.ndarray:
+        """
+        Score candidates with new filtering system.
+
+        Components:
+        - Genre matching (30%)
+        - Era matching (20%)
+        - Source material matching (15%)
+        - Theme keywords matching (25%)
+        - Quality score (10%)
+        """
+        num_candidates = len(candidates)
+        scores = np.zeros(num_candidates)
+
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            score_components = []
+
+            # 1. Genre matching (30%)
+            movie_genres = set(row['genres']) if isinstance(row['genres'], (list, np.ndarray)) else set()
+            genre_set = set(genres)
+            genre_overlap = len(movie_genres & genre_set) / len(genre_set) if genre_set else 0
+            score_components.append(genre_overlap * 0.30)
+
+            # 2. Era matching (20%)
+            era_score = TimePeriodFilter.calculate_era_score(row['year'], era)
+            score_components.append(era_score * 0.20)
+
+            # 3. Source material matching (15%)
+            movie_keywords = row.get('keywords', [])
+            source_score = SourceMaterialFilter.calculate_source_score(movie_keywords, source_material)
+            score_components.append(source_score * 0.15)
+
+            # 4. Theme keywords matching (25%)
+            if themes:
+                theme_matches = 0
+                if isinstance(movie_keywords, (list, np.ndarray)):
+                    movie_kw_lower = {str(kw).lower() for kw in movie_keywords}
+                    for theme in themes:
+                        if theme.lower() in movie_kw_lower:
+                            theme_matches += 1
+
+                theme_score = theme_matches / len(themes) if themes else 0
+                score_components.append(theme_score * 0.25)
+            else:
+                score_components.append(0.0)
+
+            # 5. Quality score (10%)
+            quality = self._calculate_simple_quality(row)
+            score_components.append(quality * 0.10)
+
+            scores[idx] = sum(score_components)
+
+        return scores
+
+    def _calculate_simple_quality(self, movie_row: pd.Series) -> float:
+        """Simple quality calculation based on rating and votes"""
+        rating = movie_row.get('avg_rating', 6.0)
+        num_votes = movie_row.get('num_votes', 0)
+
+        # Normalize rating (6.0-10.0 → 0.0-1.0)
+        rating_score = (rating - 6.0) / 4.0
+        rating_score = max(0.0, min(1.0, rating_score))
+
+        # Vote confidence
+        confidence = np.log1p(num_votes) / np.log1p(2_000_000)
+        confidence = max(0.3, min(1.0, confidence))
+
+        return rating_score * confidence
 
 
 def load_smart_system(
@@ -525,17 +892,24 @@ if __name__ == '__main__':
     engine = load_smart_system(models_dir, movies_path, keyword_db_path)
 
     print("\nTesting recommendations:")
+
+    # Test with keywords
+    selected_keywords = {
+        'age': 'recent',
+        'general': ['espionage', 'heist'],
+        'adaptation': False,
+        'pacing': ['fast_paced']
+    }
+
     recommendations = engine.recommend(
         user_id=0,
-        evening_type='date_night',
         genres=['action', 'thriller'],
-        era='modern',
-        keywords=['espionage'],
+        selected_keywords=selected_keywords,
         session_history=[],
         top_k=10
     )
 
-    print(f"\nTop 10 recommendations:")
+    print(f"\nTop 10 recommendations (with keywords):")
     for rank, movie_id in enumerate(recommendations, 1):
         movie = engine.movies[engine.movies['movie_id'] == movie_id].iloc[0]
         print(f"{rank}. {movie['title']} ({movie['year']}) - {movie['avg_rating']:.1f}/10")

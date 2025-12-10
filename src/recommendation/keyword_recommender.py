@@ -1,8 +1,8 @@
 """
 KEYWORD RECOMMENDER - Genre-based keyword suggestions
 
-Recommends 6 relevant keywords based on selected genre(s) to help users
-refine their movie search.
+Recommends relevant thematic keywords based on selected genre(s) to help users
+refine their movie search. Now with comprehensive filtering.
 """
 
 import json
@@ -10,6 +10,11 @@ import pandas as pd
 from pathlib import Path
 from collections import Counter
 from typing import List, Dict, Set, Tuple
+import sys
+
+# Import the keyword filter
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from recommendation.keyword_filter import KeywordFilter
 
 
 class KeywordRecommender:
@@ -53,7 +58,7 @@ class KeywordRecommender:
     def get_keywords_for_genres(
         self,
         genres: List[str],
-        num_keywords: int = 6,
+        num_keywords: int = 8,
         exclude_generic: bool = True
     ) -> List[str]:
         """
@@ -61,49 +66,32 @@ class KeywordRecommender:
 
         Args:
             genres: List of 1-2 genres
-            num_keywords: Number of keywords to return (default 6)
+            num_keywords: Number of keywords to return (default 8)
             exclude_generic: Whether to exclude overly generic keywords
 
         Returns:
-            List of recommended keywords
+            List of recommended keywords (thematically relevant only)
         """
-        # Generic keywords to potentially exclude
-        generic_keywords = {
-            'black and white', 'technicolor', 'silent film',
-            'pre-code', 'b movie', 'film noir', 'based on play or musical',
-            'woman director', 'female director', 'independent film', 'directorial debut'
-        }
-
         if len(genres) == 1:
             # Single genre - get top keywords
             genre = genres[0].lower()
             if genre not in self.genre_keywords:
                 return []
 
-            keywords = self.genre_keywords[genre].most_common(num_keywords * 3)
+            keywords = self.genre_keywords[genre].most_common(num_keywords * 5)
 
         else:
             # Multiple genres - find keywords common to both/intersection + unique to each
-            keywords = self._get_multi_genre_keywords(genres, num_keywords * 3)
+            keywords = self._get_multi_genre_keywords(genres, num_keywords * 5)
 
-        # Filter and select keywords
+        # Filter using comprehensive KeywordFilter
         selected = []
         for keyword, count in keywords:
-            # Skip generic if requested
-            if exclude_generic and keyword in generic_keywords:
-                continue
-
-            selected.append(keyword)
-            if len(selected) >= num_keywords:
-                break
-
-        # If we don't have enough, add generic ones back
-        if len(selected) < num_keywords:
-            for keyword, count in keywords:
-                if keyword not in selected:
-                    selected.append(keyword)
-                    if len(selected) >= num_keywords:
-                        break
+            # Use the new comprehensive filter
+            if KeywordFilter.is_relevant(keyword):
+                selected.append(keyword)
+                if len(selected) >= num_keywords:
+                    break
 
         return selected[:num_keywords]
 

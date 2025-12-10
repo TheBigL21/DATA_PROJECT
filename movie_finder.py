@@ -1,7 +1,7 @@
 """
-MOVIE FINDER - 3-Question Recommendation Interface
+MOVIE FINDER - 3-Question Recommendation Interface (Enhanced)
 
-Complete interface with ML-powered genre learning
+Updated with inference-based keyword system
 """
 
 from pathlib import Path
@@ -16,6 +16,8 @@ from recommendation.smart_engine import load_smart_system
 from analytics.genre_tracker import GenreAnalytics
 from auth.user_auth import authenticate
 from recommendation.keyword_recommender import KeywordRecommender
+from recommendation.time_period_filter import TimePeriodFilter
+from recommendation.source_material_filter import SourceMaterialFilter
 
 
 def clear_screen():
@@ -116,7 +118,7 @@ def ask_genres(evening_type, genre_config):
 
         if genre not in selected_genres:
             selected_genres.append(genre)
-            print(f"✓ Selected: {genre.capitalize()}")
+            print(f"Selected: {genre.capitalize()}")
 
             if len(selected_genres) == 2:
                 break
@@ -124,54 +126,107 @@ def ask_genres(evening_type, genre_config):
     return selected_genres, core_genres + (extended_genres if show_extended else [])
 
 
-def ask_age_preference():
-    """Q3: Age of Movie"""
+def ask_era():
+    """Q3: Time Period/Era Selection"""
     print("\n" + "-"*60)
-    print("What era are you in the mood for?\n")
+    print("What vibe are you feeling?\n")
 
-    options = [
-        "1. Less than 5 years old",
-        "2. Less than 10 years old",
-        "3. Less than 20 years old",
-        "4. Doesn't Matter"
-    ]
+    era_options = TimePeriodFilter.get_era_options()
 
-    for opt in options:
-        print(f"  {opt}")
+    # Display only the label without description
+    print("  1. New Generation (2010+)")
+    print("  2. Golden Era (1990-2009)")
+    print("  3. Old School (Before 1990)")
+    print("  4. Doesn't matter")
 
     while True:
-        choice = input("\nSelect (1-4): ").strip()
-        if choice in ['1', '2', '3', '4']:
-            ages = [
-                "Less than 5 years old",
-                "Less than 10 years old",
-                "Less than 20 years old",
-                "Doesn't Matter"
-            ]
-            return ages[int(choice) - 1]
-        print("Invalid choice")
+        choice = input("\nSelect vibe (1-4): ").strip()
+
+        if choice.isdigit() and 1 <= int(choice) <= len(era_options):
+            selected_era = era_options[int(choice) - 1]
+            print(f"Selected: {selected_era['label']}")
+            return selected_era['id']
+
+        print("Invalid choice. Please enter a number 1-4.")
 
 
-def ask_keywords(selected_genres, keyword_recommender):
-    """Q3: Keyword Selection"""
+
+
+def get_relevant_source_material(selected_genres):
+    """Determine the most relevant source material option for given genres"""
+    # Genre to source material mapping (most relevant for each genre)
+    genre_source_map = {
+        'fantasy': 'book',
+        'sci-fi': 'book',
+        'romance': 'book',
+        'drama': 'true_story',
+        'biography': 'true_story',
+        'history': 'true_story',
+        'war': 'true_story',
+        'action': 'comic',
+        'adventure': 'book',
+        'crime': 'true_story',
+        'thriller': 'book',
+        'mystery': 'book',
+        'horror': 'book',
+        'musical': 'play_musical',
+        'comedy': 'book'
+    }
+
+    # Check selected genres and find most common source material
+    source_votes = {}
+    for genre in selected_genres:
+        genre_lower = genre.lower()
+        if genre_lower in genre_source_map:
+            source = genre_source_map[genre_lower]
+            source_votes[source] = source_votes.get(source, 0) + 1
+
+    # Return most voted source, or default to 'book'
+    if source_votes:
+        most_relevant = max(source_votes.items(), key=lambda x: x[1])[0]
+        return most_relevant
+
+    return 'book'  # Default fallback
+
+
+def ask_thematic_keywords(selected_genres, keyword_recommender):
+    """Q4: Thematic Keywords Selection (with optional source material)"""
     print("\n" + "-"*60)
-    print("Select keywords to refine your search (Select up to 3)\n")
+    print("What themes interest you? (Select up to 3, or press Enter to skip)\n")
 
-    # Get recommended keywords based on genres
-    recommended = keyword_recommender.get_keywords_for_genres(selected_genres, num_keywords=6)
+    # Get thematic keywords (now filtered via KeywordFilter)
+    thematic_keywords = keyword_recommender.get_keywords_for_genres(selected_genres, num_keywords=8)
 
-    print("SUGGESTED KEYWORDS:")
-    for i, keyword in enumerate(recommended, 1):
-        print(f"  {i}. {keyword.capitalize()}")
+    if not thematic_keywords:
+        print("No specific keywords available for these genres.")
+        return []
 
-    print(f"\n  {len(recommended) + 1}. Skip (no keywords)")
+    print("THEMES:")
+    for i, kw in enumerate(thematic_keywords, 1):
+        kw_display = kw.replace('_', ' ').title()
+        print(f"  {i}. {kw_display}")
 
-    selected_keywords = []
-    while len(selected_keywords) < 3:
-        prompt = "\nSelect keyword" if len(selected_keywords) == 0 else "\nSelect another keyword (or press Enter to continue)"
+    # Add ONE relevant source material option
+    relevant_source = get_relevant_source_material(selected_genres)
+    source_info = SourceMaterialFilter.SOURCE_KEYWORDS[relevant_source]
+    source_display = source_info['label']
+
+    print(f"\n  {len(thematic_keywords) + 1}. {source_display}")
+
+    print("\n" + "-"*60)
+
+    selected = []
+    selected_source = None
+
+    while len(selected) < 3:
+        if len(selected) == 0:
+            prompt = "\nSelect a theme (or press Enter to skip)"
+        else:
+            prompt = f"\nSelect another theme (or press Enter to continue) [{len(selected)}/3]"
+
         choice = input(f"{prompt}: ").strip()
 
-        if not choice and len(selected_keywords) >= 0:
+        if not choice:
             break
 
         if not choice.isdigit():
@@ -179,51 +234,46 @@ def ask_keywords(selected_genres, keyword_recommender):
 
         choice_num = int(choice)
 
-        # Check for skip
-        if choice_num == len(recommended) + 1:
-            break
+        # Check if it's the source material option
+        if choice_num == len(thematic_keywords) + 1:
+            if selected_source:
+                print(f"Source material already selected: {source_display}")
+                continue
 
-        # Get selected keyword
-        if 1 <= choice_num <= len(recommended):
-            keyword = recommended[choice_num - 1]
-            if keyword not in selected_keywords:
-                selected_keywords.append(keyword)
-                print(f"✓ Selected: {keyword.capitalize()}")
+            selected_source = relevant_source
+            print(f"Selected: {source_display}")
+            selected.append(f"__SOURCE__{relevant_source}")  # Mark as source material
 
-                if len(selected_keywords) == 3:
-                    break
+            if len(selected) == 3:
+                print("\nMaximum of 3 themes selected.")
+                break
+
+        elif 1 <= choice_num <= len(thematic_keywords):
+            keyword = thematic_keywords[choice_num - 1]
+
+            if keyword in selected:
+                print(f"Already selected: {keyword}")
+                continue
+
+            selected.append(keyword)
+            kw_display = keyword.replace('_', ' ').title()
+            print(f"Selected: {kw_display}")
+
+            if len(selected) == 3:
+                print("\nMaximum of 3 themes selected.")
+                break
         else:
             print("Invalid choice")
 
-    return selected_keywords
+    if selected:
+        print("\nThemes selected:")
+        for kw in selected:
+            if kw.startswith("__SOURCE__"):
+                print(f"  - {source_display}")
+            else:
+                print(f"  - {kw.replace('_', ' ').title()}")
 
-
-def ask_quality():
-    """Q4: Quality Level"""
-    print("\n" + "-"*60)
-    print("What quality level?\n")
-
-    options = [
-        "1. Only the best (8.0+)",
-        "2. Good movies (7.0+)",
-        "3. Hidden gems (6.0+)",
-        "4. I'll try anything (5.0+)"
-    ]
-
-    for opt in options:
-        print(f"  {opt}")
-
-    while True:
-        choice = input("\nSelect (1-4): ").strip()
-        if choice in ['1', '2', '3', '4']:
-            qualities = [
-                "Only the best (8.0+)",
-                "Good movies (7.0+)",
-                "Hidden gems (6.0+)",
-                "I'll try anything (5.0+)"
-            ]
-            return qualities[int(choice) - 1]
-        print("Invalid choice")
+    return selected
 
 
 def display_recommendations(engine, user_answers, user_data):
@@ -239,39 +289,33 @@ def display_recommendations(engine, user_answers, user_data):
         from recommendation.region_weighting import RegionWeighting
         weighter = RegionWeighting()
         region_info = weighter.get_region_info(user_data['region'])
-        print(f"📍 {region_info}")
+        print(f"Region: {region_info}")
 
+    # Display search summary
     print(f"\nSearching for {', '.join([g.capitalize() for g in user_answers['genres']])} movies...")
-    if user_answers.get('keywords'):
-        print(f"Keywords: {', '.join([k.capitalize() for k in user_answers['keywords']])}")
-    print(f"Era: {user_answers['age']}\n")
+
+    if user_answers.get('era') and user_answers['era'] != 'any':
+        era_label = TimePeriodFilter.get_era_short_label(user_answers['era'])
+        print(f"  - Era: {era_label}")
+
+    if user_answers.get('source_material') and user_answers['source_material'] != 'any':
+        source_label = SourceMaterialFilter.get_source_short_label(user_answers['source_material'])
+        print(f"  - Source: {source_label}")
+
+    if user_answers.get('themes') and len(user_answers['themes']) > 0:
+        themes_str = ', '.join([t.replace('_', ' ').title() for t in user_answers['themes']])
+        print(f"  - Themes: {themes_str}")
+
+    print()
 
     # Generate recommendations
     try:
-        # Map age preference to era
-        age_to_era = {
-            "Less than 5 years old": "fresh",
-            "Less than 10 years old": "modern",
-            "Less than 20 years old": "timeless",
-            "Doesn't Matter": "old_school"
-        }
-        era = age_to_era.get(user_answers['age'], "modern")
-
-        # Map evening type to smart engine format
-        evening_map = {
-            "Chill Evening by myself": "chill_evening",
-            "Date night": "date_night",
-            "Family night": "family_night",
-            "Friends night": "friends_night"
-        }
-        evening_type = evening_map.get(user_answers['evening_type'], "chill_evening")
-
         recommendations = engine.recommend(
             user_id=0,
-            evening_type=evening_type,
             genres=user_answers['genres'],
-            era=era,
-            keywords=user_answers.get('keywords', []),
+            era=user_answers.get('era'),
+            source_material=user_answers.get('source_material'),
+            themes=user_answers.get('themes', []),
             session_history=[],
             top_k=10
         )
@@ -285,26 +329,22 @@ def display_recommendations(engine, user_answers, user_data):
             genres_str = ', '.join([g.capitalize() for g in list(movie['genres'])[:3]])
 
             print(f"{rank:2d}. {movie['title']} ({movie['year']})")
-            print(f"    {genres_str} | {movie['runtime']:.0f} min | ⭐ {movie['avg_rating']:.1f}/10")
-            print(f"    👥 {movie['num_votes']:,} votes | Director: {movie['director']}")
+            print(f"    {genres_str} | {movie['runtime']:.0f} min | Rating: {movie['avg_rating']:.1f}/10")
+            print(f"    {movie['num_votes']:,} votes | Director: {movie['director']}")
 
             # Display TMDB information if available
             if pd.notna(movie.get('tmdb_id')):
-                # Show composite rating if different from IMDb
-                if pd.notna(movie.get('composite_rating')) and abs(movie['composite_rating'] - movie['avg_rating']) > 0.1:
-                    print(f"    🎬 Composite Rating: {movie['composite_rating']:.1f}/10 (IMDb + TMDB)")
-
                 # Show description
                 if pd.notna(movie.get('description')) and movie['description']:
                     desc = movie['description']
                     # Truncate description to 150 chars
                     if len(desc) > 150:
                         desc = desc[:147] + "..."
-                    print(f"    📝 {desc}")
+                    print(f"    {desc}")
 
                 # Show poster URL
                 if pd.notna(movie.get('poster_url')) and movie['poster_url']:
-                    print(f"    🖼️  Poster: {movie['poster_url']}")
+                    print(f"    Poster: {movie['poster_url']}")
 
             print()
 
@@ -343,30 +383,41 @@ def main():
         print("\nPlease ensure the pipeline has completed successfully.")
         return
 
-    # STEP 3: Ask all questions
+    # STEP 3: Ask 4 questions (source material now integrated into keywords)
     evening_type = ask_evening_type()
     selected_genres, presented_genres = ask_genres(evening_type, genre_config)
-    selected_keywords = ask_keywords(selected_genres, keyword_recommender)
-    age_pref = ask_age_preference()
+    selected_era = ask_era()
+    selected_themes = ask_thematic_keywords(selected_genres, keyword_recommender)
 
     # Log for ML learning
     analytics.log_presentation(evening_type, presented_genres)
     analytics.log_selection(evening_type, selected_genres)
 
+    # Extract source material from themes (if selected)
+    source_material = 'any'
+    themes_only = []
+
+    for theme in selected_themes:
+        if theme.startswith("__SOURCE__"):
+            source_material = theme.replace("__SOURCE__", "")
+        else:
+            themes_only.append(theme)
+
     # Store answers
     user_answers = {
         'evening_type': evening_type,
         'genres': selected_genres,
-        'keywords': selected_keywords,
-        'age': age_pref
+        'era': selected_era,
+        'source_material': source_material,
+        'themes': themes_only
     }
 
-    # STEP 4: Generate and display recommendations (with region-based weighting)
+    # STEP 4: Generate and display recommendations
     success = display_recommendations(engine, user_answers, user_data)
 
     if success:
         print("\n" + "="*60)
-        print("✓ Recommendations generated successfully!")
+        print("Recommendations generated successfully!")
         print("="*60 + "\n")
 
     input("Press Enter to exit...")
@@ -374,4 +425,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    

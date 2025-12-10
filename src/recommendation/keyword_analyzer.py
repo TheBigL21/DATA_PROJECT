@@ -30,12 +30,16 @@ class KeywordAnalyzer:
     GENERIC_KEYWORDS = {
         # Technical/Format
         'based on novel', 'based on book', 'based on play', 'based on comic',
+        'based on novel or book', 'based on play or musical', 'based on true story',
         'remake', 'sequel', 'prequel', 'reboot', 'spin off',
         'black and white', 'color', 'silent film', 'independent film',
+        'duringcreditsstinger', 'aftercreditsstinger', 'post credits scene',
+        'technicolor', 'cinemascope', 'pre-code', 'b movie',
 
         # Generic descriptors
         'low budget', 'cult film', 'cult classic', 'surprise ending',
         'flashback', 'voice over narration', 'narration',
+        'art film', 'arthouse', 'critically acclaimed', 'controversial', 'banned film',
 
         # Too broad/vague
         'male protagonist', 'female protagonist', 'protagonist',
@@ -43,6 +47,7 @@ class KeywordAnalyzer:
         'friendship', 'love', 'family', 'father', 'mother',
         'husband', 'wife', 'brother', 'sister', 'son', 'daughter',
         'man', 'woman', 'boy', 'girl', 'character', 'story',
+        'husband wife relationship', 'parent child relationship',
 
         # Production details
         'cinematography', 'camera', 'scene', 'shot', 'editing',
@@ -50,7 +55,54 @@ class KeywordAnalyzer:
 
         # Generic actions
         'escape', 'rescue', 'fight', 'battle', 'chase', 'running',
-        'hiding', 'searching', 'looking', 'finding', 'trying'
+        'hiding', 'searching', 'looking', 'finding', 'trying',
+
+        # Identity/representation
+        'lgbt', 'gay', 'lesbian', 'transgender', 'bisexual', 'queer', 'lgbtq',
+        'gay theme', 'lesbian relationship', 'gay relationship',
+
+        # Demographic
+        'african american', 'black people', 'hispanic', 'latino', 'latina',
+        'asian', 'white people', 'race relations', 'racial issues',
+
+        # Age/life stage (too vague)
+        'coming of age', 'midlife crisis', 'teenage', 'childhood', 'elderly',
+        'adolescence', 'youth', 'old age', 'growing up',
+
+        # Relationship dynamics (too generic)
+        'interracial relationship', 'age difference', 'class differences',
+        'forbidden love', 'romance', 'breakup', 'divorce', 'infidelity',
+        'love triangle', 'unrequited love', 'extramarital affair',
+        'marriage', 'wedding', 'engagement',
+
+        # Standalone content descriptors
+        'nudity', 'sex', 'sexuality', 'sexual content', 'erotic', 'sensuality',
+        'strong language', 'profanity', 'gore', 'graphic violence',
+        'sex scene', 'sexual abuse', 'rape', 'sexual violence',
+
+        # Generic emotions/states
+        'jealousy', 'revenge', 'betrayal', 'loss', 'grief', 'trauma',
+        'fear', 'hope', 'despair', 'guilt', 'redemption',
+
+        # Generic locations (too broad)
+        'small town', 'big city', 'new york city', 'los angeles california',
+        'paris, france', 'london, england', 'san francisco california',
+
+        # Time periods (too generic without context)
+        '19th century', '18th century', '17th century', '16th century',
+        '15th century', '1st century', '1900s', '1910s', '1940s',
+
+        # Historical (too broad)
+        'world war ii', 'world war i', 'historical figure', 'biography',
+        'based on true story',
+
+        # Film noir elements (standalone)
+        'film noir', 'british noir', 'western noir',
+
+        # Generic plot elements
+        'trial', 'investigation', 'murder investigation', 'murder mystery',
+        'on the run', 'fugitive', 'kidnapping', 'blackmail', 'deception',
+        'mistaken identity', 'assumed identity', 'framed for murder'
     }
 
     def __init__(self, movies_df: pd.DataFrame):
@@ -103,7 +155,7 @@ class KeywordAnalyzer:
         print(f"  - {len(self.genre_keywords)} single genres")
         print(f"  - {len(self.combo_keywords)} genre combinations")
 
-    def _find_common_combinations(self, min_movies: int = 100) -> List[Tuple[str, str]]:
+    def _find_common_combinations(self, min_movies: int = 200) -> List[Tuple[str, str]]:
         """
         Find common 2-genre combinations that appear in at least min_movies.
 
@@ -125,13 +177,14 @@ class KeywordAnalyzer:
         common = [combo for combo, count in combo_counts.items() if count >= min_movies]
         return sorted(common, key=lambda x: combo_counts[x], reverse=True)[:50]  # Top 50
 
-    def _extract_keywords_for_genre(self, genre: str, top_k: int = 20) -> List[Tuple[str, float]]:
+    def _extract_keywords_for_genre(self, genre: str, top_k: int = 20, min_rating: float = 7.0) -> List[Tuple[str, float]]:
         """
-        Extract top keywords for a single genre using TF-IDF.
+        Extract top keywords for a single genre using TF-IDF with quality focus.
 
         Args:
             genre: Genre name
             top_k: Number of keywords to return
+            min_rating: Minimum rating to focus on quality movies (default 7.0)
 
         Returns:
             List of (keyword, score) tuples, sorted by relevance
@@ -144,27 +197,42 @@ class KeywordAnalyzer:
         if len(genre_movies) == 0:
             return []
 
+        # Focus on quality movies for keyword extraction
+        quality_movies = genre_movies[genre_movies['avg_rating'] >= min_rating]
+
+        if len(quality_movies) < 20:
+            # Fallback to lower threshold if not enough high-rated movies
+            quality_movies = genre_movies[genre_movies['avg_rating'] >= 6.5]
+
         # Extract keywords from TMDB
         keyword_counts = Counter()
-        for keywords in genre_movies['keywords'].dropna():
+        for keywords in quality_movies['keywords'].dropna():
             if isinstance(keywords, (list, np.ndarray)):
                 for kw in keywords:
                     kw_clean = str(kw).lower().strip()
                     if kw_clean and kw_clean not in self.GENERIC_KEYWORDS:
                         keyword_counts[kw_clean] += 1
 
-        # Calculate TF-IDF scores
-        scores = self._calculate_tfidf(keyword_counts, len(genre_movies), genre)
+        # Calculate TF-IDF scores with quality boost
+        scores = self._calculate_tfidf_with_quality(
+            keyword_counts,
+            len(quality_movies),
+            genre,
+            quality_movies
+        )
+
+        # Apply quality filters
+        filtered_scores = self._apply_quality_filters(scores, genre_movies, [genre])
 
         # Return top K
-        return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        return sorted(filtered_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
-    def _extract_keywords_for_combo(self, combo: Tuple[str, str], top_k: int = 10) -> List[Tuple[str, float]]:
+    def _extract_keywords_for_combo(self, combo: Tuple[str, str], top_k: int = 20) -> List[Tuple[str, float]]:
         """
         Extract keywords unique to a genre combination.
 
-        Strategy: Find keywords that appear more often in this combo
-        than in either genre alone.
+        Strategy: Find keywords that appear in this combo but NOT in
+        the top keywords of either individual genre.
         """
         genre1, genre2 = combo
 
@@ -190,20 +258,17 @@ class KeywordAnalyzer:
         # Calculate combo-specific TF-IDF
         scores = self._calculate_tfidf(keyword_counts, len(combo_movies), f"{genre1}+{genre2}")
 
-        # Boost keywords that appear more in combo than in individual genres
-        boosted_scores = {}
+        # HARD EXCLUDE keywords that appear in top-15 of either individual genre
+        genre1_top_keywords = set([kw for kw, _ in self.genre_keywords.get(genre1, [])[:15]])
+        genre2_top_keywords = set([kw for kw, _ in self.genre_keywords.get(genre2, [])[:15]])
+
+        filtered_scores = {}
         for keyword, score in scores.items():
-            # Check if keyword is in top keywords for individual genres
-            in_genre1 = keyword in dict(self.genre_keywords.get(genre1, []))
-            in_genre2 = keyword in dict(self.genre_keywords.get(genre2, []))
+            # Only keep keywords NOT common in either individual genre
+            if keyword not in genre1_top_keywords and keyword not in genre2_top_keywords:
+                filtered_scores[keyword] = score
 
-            # Boost combo-specific keywords
-            if not in_genre1 and not in_genre2:
-                boosted_scores[keyword] = score * 1.5  # 50% boost for unique keywords
-            else:
-                boosted_scores[keyword] = score
-
-        return sorted(boosted_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        return sorted(filtered_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
     def _calculate_tfidf(self, keyword_counts: Counter, num_docs: int, context: str) -> Dict[str, float]:
         """
@@ -232,6 +297,103 @@ class KeywordAnalyzer:
 
         return scores
 
+    def _calculate_tfidf_with_quality(self, keyword_counts: Counter, num_docs: int,
+                                      context: str, quality_movies: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calculate TF-IDF scores with quality boost for keywords.
+
+        Keywords appearing in higher-rated movies get a boost.
+        """
+        scores = {}
+
+        for keyword, tf in keyword_counts.items():
+            # Base TF-IDF
+            tf_score = tf / num_docs
+
+            # Document frequency
+            df = sum(
+                1 for keywords in self.movies_df['keywords'].dropna()
+                if isinstance(keywords, (list, np.ndarray)) and keyword in [str(k).lower() for k in keywords]
+            )
+
+            idf_score = np.log(len(self.movies_df) / (1 + df))
+
+            # Quality boost: calculate average rating of movies with this keyword
+            movies_with_kw = quality_movies[
+                quality_movies['keywords'].apply(
+                    lambda kws: keyword in [str(k).lower() for k in kws] if isinstance(kws, (list, np.ndarray)) else False
+                )
+            ]
+
+            if len(movies_with_kw) > 0:
+                avg_rating = movies_with_kw['avg_rating'].mean()
+                # Boost: 7.0 rating = 1.0x, 8.0 rating = 1.2x, 8.5 rating = 1.3x
+                quality_boost = 1.0 + max(0, (avg_rating - 7.0) * 0.2)
+            else:
+                quality_boost = 1.0
+
+            # Final score
+            scores[keyword] = tf_score * idf_score * quality_boost
+
+        return scores
+
+    def _apply_quality_filters(self, scores: Dict[str, float],
+                               genre_movies: pd.DataFrame,
+                               genres: List[str]) -> Dict[str, float]:
+        """
+        Apply quality filters to keyword scores:
+        1. Specificity check (not too common)
+        2. Remove genre synonyms
+        """
+        # Genre synonyms to exclude
+        GENRE_SYNONYMS = {
+            'action': ['action hero', 'action packed', 'explosive action', 'high octane'],
+            'thriller': ['suspense', 'suspenseful', 'thrilling', 'tension'],
+            'comedy': ['funny', 'humor', 'humorous', 'laugh', 'hilarious'],
+            'horror': ['scary', 'terrifying', 'frightening', 'spooky'],
+            'drama': ['dramatic', 'emotional', 'moving'],
+            'romance': ['romantic', 'love story'],
+            'sci-fi': ['futuristic', 'science fiction'],
+            'fantasy': ['magical', 'fantastical'],
+        }
+
+        filtered = {}
+
+        for keyword, score in scores.items():
+            # Check if keyword is genre synonym
+            is_synonym = False
+            for genre in genres:
+                genre_lower = genre.lower()
+                if genre_lower in GENRE_SYNONYMS:
+                    if keyword in GENRE_SYNONYMS[genre_lower]:
+                        is_synonym = True
+                        break
+                # Also check if keyword contains genre name
+                if genre_lower in keyword or keyword in genre_lower:
+                    is_synonym = True
+                    break
+
+            if is_synonym:
+                continue
+
+            # Check specificity (appears in 5-40% of genre movies)
+            movies_with_kw = genre_movies[
+                genre_movies['keywords'].apply(
+                    lambda kws: keyword in [str(k).lower() for k in kws] if isinstance(kws, (list, np.ndarray)) else False
+                )
+            ]
+
+            frequency = len(movies_with_kw) / len(genre_movies)
+
+            # Keep keywords with reasonable frequency
+            if 0.05 <= frequency <= 0.40:
+                filtered[keyword] = score
+            elif frequency < 0.05 and score > 0.5:
+                # Rare but high-scoring keywords are OK
+                filtered[keyword] = score * 0.7  # Slightly penalize
+
+        return filtered
+
     def suggest_keywords(self, genres: List[str], num_keywords: int = 8) -> List[str]:
         """
         Suggest contextually relevant keywords based on selected genres.
@@ -252,28 +414,10 @@ class KeywordAnalyzer:
             return [kw for kw, score in keywords_with_scores[:num_keywords]]
 
         elif len(genres) == 2:
-            # Two genres - blend both + combo-specific
-            genre1, genre2 = genres[0], genres[1]
+            # Two genres - return ONLY combo-specific keywords
             combo_key = tuple(sorted(genres))
-
-            # Get keywords from each source
-            kw1 = self.genre_keywords.get(genre1, [])[:5]
-            kw2 = self.genre_keywords.get(genre2, [])[:5]
-            combo_kw = self.combo_keywords.get(combo_key, [])[:4]
-
-            # Merge and deduplicate
-            all_kw = kw1 + kw2 + combo_kw
-            seen = set()
-            result = []
-
-            for kw, score in all_kw:
-                if kw not in seen:
-                    result.append(kw)
-                    seen.add(kw)
-                    if len(result) >= num_keywords:
-                        break
-
-            return result
+            combo_kw = self.combo_keywords.get(combo_key, [])
+            return [kw for kw, score in combo_kw[:num_keywords]]
 
         return []
 
