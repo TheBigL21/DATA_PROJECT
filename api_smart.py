@@ -20,11 +20,16 @@ from flask_cors import CORS
 from pathlib import Path
 import sys
 import logging
+import json
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from recommendation.smart_engine import load_smart_system
+
+from recommendation.smart_engine import load_smart_system  # type: ignore
+from recommendation.time_period_filter import TimePeriodFilter  # type: ignore
+from recommendation.source_material_filter import SourceMaterialFilter  # type: ignore
+from recommendation.keyword_recommender import KeywordRecommender  # type: ignore  
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,9 +40,11 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend
 
 # Load recommendation system
-MODELS_DIR = Path("./output/models")
-MOVIES_PATH = Path("./output/processed/movies.parquet")
-KEYWORD_DB_PATH = Path("./output/models/keyword_database.pkl")
+# Use absolute paths based on script location
+SCRIPT_DIR = Path(__file__).parent
+MODELS_DIR = SCRIPT_DIR / "output" / "models"
+MOVIES_PATH = SCRIPT_DIR / "output" / "processed" / "movies.parquet"
+KEYWORD_DB_PATH = SCRIPT_DIR / "output" / "models" / "keyword_database.pkl"
 
 logger.info("Loading smart recommendation system...")
 try:
@@ -45,6 +52,17 @@ try:
     logger.info("✓ Smart system loaded successfully")
     logger.info(f"  - {len(engine.movies):,} movies")
     logger.info(f"  - Keyword analyzer: {'✓' if engine.keyword_analyzer else '✗'}")
+    
+    # Initialize KeywordRecommender (same as interactive_movie_finder.py)
+    # Wrap in try-except to handle gracefully if it fails
+    try:
+        logger.info("Initializing keyword recommender...")
+        keyword_recommender = KeywordRecommender(str(MOVIES_PATH))
+        logger.info("✓ Keyword recommender initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize KeywordRecommender: {e}")
+        logger.warning("Falling back to engine.keyword_analyzer for keyword suggestions")
+        keyword_recommender = None
 except Exception as e:
     logger.error(f"Failed to load system: {e}")
     raise
@@ -83,56 +101,80 @@ def get_questionnaire_options():
             'evening_types': [
                 {
                     'id': 'chill_evening',
-                    'label': '🛋️ Chill Evening by myself',
+                    'label': 'Chill Evening by myself',
                     'description': 'Relaxed solo viewing, open to experimenting'
                 },
                 {
                     'id': 'date_night',
-                    'label': '💑 Date Night',
+                    'label': 'Date Night',
                     'description': 'Impressive movies for a special evening'
                 },
                 {
                     'id': 'family_night',
-                    'label': '👨‍👩‍👧‍👦 Family Night',
+                    'label': 'Family Night',
                     'description': 'Safe, reliable entertainment for everyone'
                 },
                 {
                     'id': 'friends_night',
-                    'label': '👥 Friends Night',
+                    'label': 'Friends Night',
                     'description': 'Fun social viewing experience'
                 }
             ],
             'genres': sorted(list(all_genres)),
-            'eras': [
-                {
-                    'id': 'fresh',
-                    'label': '🔥 Fresh Picks',
-                    'description': 'Last 5 years (2020-2025)',
-                    'years': '2020-2025'
-                },
-                {
-                    'id': 'modern',
-                    'label': '✨ Modern Classics',
-                    'description': 'Last 10 years (2015-2025)',
-                    'years': '2015-2025'
-                },
-                {
-                    'id': 'timeless',
-                    'label': '🎬 Timeless Favorites',
-                    'description': 'Last 25 years (2000-2025)',
-                    'years': '2000-2025'
-                },
-                {
-                    'id': 'old_school',
-                    'label': '🎞️ Old-School Gems',
-                    'description': 'All time (1900-2025)',
-                    'years': '1900-2025'
-                }
-            ]
+            'eras': TimePeriodFilter.get_era_options()
         }), 200
 
     except Exception as e:
         logger.error(f"Error in get_questionnaire_options: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/questionnaire/genres', methods=['GET'])
+def get_genre_config():
+    """
+    Get core and extended genres for a given evening type.
+    
+    Query params:
+        evening_type: Frontend ID ('chill_evening', 'date_night', etc.)
+    
+    Response:
+    {
+        "core": ["thriller", "drama", ...],
+        "extended": ["crime", "biography", ...]
+    }
+    """
+    try:
+        evening_type = request.args.get('evening_type')
+        if not evening_type:
+            return jsonify({'error': 'Missing required parameter: evening_type'}), 400
+        
+        # Map frontend IDs to backend strings
+        evening_type_map = {
+            'chill_evening': 'Chill Evening by myself',
+            'date_night': 'Date night',
+            'family_night': 'Family night',
+            'friends_night': 'Friends night'
+        }
+        
+        backend_type = evening_type_map.get(evening_type, evening_type)
+        
+        # Load genre_allocation.json
+        config_path = Path('./config/genre_allocation.json')
+        if not config_path.exists():
+            return jsonify({'error': 'Genre configuration file not found'}), 500
+        
+        with open(config_path, 'r') as f:
+            genre_config = json.load(f)
+        
+        if backend_type not in genre_config:
+            return jsonify({'error': f'Invalid evening_type: {evening_type}'}), 400
+        
+        return jsonify(genre_config[backend_type]), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_genre_config: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -162,8 +204,12 @@ def generate_keywords():
         if not isinstance(genres, list) or len(genres) == 0:
             return jsonify({'error': 'genres must be a non-empty list'}), 400
 
-        # Generate keywords
-        if engine.keyword_analyzer:
+        # Generate keywords using KeywordRecommender if available, else fallback to engine
+        if keyword_recommender:
+            # Use KeywordRecommender (same as interactive_movie_finder.py)
+            genres_lower = [g.lower().strip() for g in genres]
+            keywords = keyword_recommender.get_keywords_for_genres(genres_lower, num_keywords=8)
+        elif engine.keyword_analyzer:
             keywords = engine.suggest_keywords(genres, num_keywords=8)
         else:
             keywords = []
@@ -172,6 +218,76 @@ def generate_keywords():
 
     except Exception as e:
         logger.error(f"Error in generate_keywords: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/questionnaire/source-material', methods=['POST'])
+def get_relevant_source_material():
+    """
+    Get relevant source material option for given genres.
+    
+    Request:
+    {
+        "genres": ["action", "thriller"]
+    }
+    
+    Response:
+    {
+        "source_material": "book",
+        "label": "Based on Book/Novel",
+        "description": "Movies adapted from books or novels"
+    }
+    """
+    try:
+        data = request.get_json()
+        genres = data.get('genres', [])
+        
+        if not isinstance(genres, list):
+            return jsonify({'error': 'genres must be a list'}), 400
+        
+        # Same logic as get_relevant_source_material() in interactive_movie_finder.py
+        genre_source_map = {
+            'fantasy': 'book',
+            'sci-fi': 'book',
+            'romance': 'book',
+            'drama': 'true_story',
+            'biography': 'true_story',
+            'history': 'true_story',
+            'war': 'true_story',
+            'action': 'comic',
+            'adventure': 'book',
+            'crime': 'true_story',
+            'thriller': 'book',
+            'mystery': 'book',
+            'horror': 'book',
+            'musical': 'play_musical',
+            'comedy': 'book'
+        }
+        
+        source_votes = {}
+        for genre in genres:
+            genre_lower = genre.lower()
+            if genre_lower in genre_source_map:
+                source = genre_source_map[genre_lower]
+                source_votes[source] = source_votes.get(source, 0) + 1
+        
+        if source_votes:
+            most_relevant = max(source_votes.items(), key=lambda x: x[1])[0]
+        else:
+            most_relevant = 'book'  # Default fallback
+        
+        source_info = SourceMaterialFilter.SOURCE_KEYWORDS[most_relevant]
+        
+        return jsonify({
+            'source_material': most_relevant,
+            'label': source_info['label'],
+            'description': source_info['description']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in get_relevant_source_material: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -185,10 +301,11 @@ def recommend():
         "user_id": int,
         "evening_type": str,  // 'date_night', 'family_night', 'friends_night', 'chill_evening'
         "genres": [str, str],  // 1-2 genres
-        "era": str,  // 'fresh', 'modern', 'timeless', 'old_school'
-        "keywords": [str, str],  // 0-2 keywords (optional)
+        "era": str,  // 'new_era', 'millennium', 'old_school', 'golden_era', 'any'
+        "keywords": [str, str],  // 0-3 keywords/themes (optional)
+        "source_material": str,  // Optional: 'book', 'true_story', 'comic', 'play_musical', 'original', 'any'
         "session_history": [
-            {"movie_id": int, "action": "left|right|up"},
+            {"movie_id": int, "action": "yes|no|final"},
             ...
         ],
         "top_k": int (optional, default 20)
@@ -231,6 +348,7 @@ def recommend():
         genres = data['genres']
         era = data['era']
         keywords = data.get('keywords', [])
+        source_material = data.get('source_material', 'any')
         session_history = data.get('session_history', [])
         top_k = data.get('top_k', 20)
 
@@ -243,31 +361,22 @@ def recommend():
 
         # Generate recommendations
         logger.info(f"Generating recommendations for user {user_id}")
-        logger.info(f"  Evening: {evening_type}, Genres: {genres}, Era: {era}, Keywords: {keywords}")
+        logger.info(f"  Evening: {evening_type}, Genres: {genres}, Era: {era}, Keywords: {keywords}, Source Material: {source_material}")
 
         movie_ids = engine.recommend(
             user_id=user_id,
             genres=genres,
             era=era,
+            source_material=source_material,
             themes=keywords,  # API uses 'keywords' but engine expects 'themes'
             session_history=session_history,
             top_k=top_k
         )
 
-        logger.info(f"  Engine returned {len(movie_ids)} movie IDs")
-
         # Format response
         recommendations = []
         for movie_id in movie_ids:
-            try:
-                movie_df = engine.movies[engine.movies['movie_id'] == movie_id]
-                if len(movie_df) == 0:
-                    logger.warning(f"Movie ID {movie_id} not found in movies DataFrame")
-                    continue
-                movie = movie_df.iloc[0]
-            except Exception as e:
-                logger.error(f"Error accessing movie {movie_id}: {e}")
-                continue
+            movie = engine.movies[engine.movies['movie_id'] == movie_id].iloc[0]
 
             # Calculate combined rating
             imdb_rating = movie['avg_rating']
@@ -296,17 +405,6 @@ def recommend():
             recommendations.append(rec)
 
         logger.info(f"✓ Generated {len(recommendations)} recommendations")
-        
-        if len(recommendations) == 0:
-            logger.warning(f"No recommendations found for genres={genres}, era={era}, keywords={keywords}")
-            logger.warning(f"Total movies in database: {len(engine.movies)}")
-            # Check if any movies match the genres
-            if genres:
-                genre_matches = engine.movies['genres'].apply(
-                    lambda g: any(genre.lower() in str(g).lower() for genre in genres) 
-                    if isinstance(g, (list, tuple, str)) else False
-                )
-                logger.warning(f"Movies matching genres {genres}: {genre_matches.sum()}")
 
         return jsonify({'recommendations': recommendations}), 200
 

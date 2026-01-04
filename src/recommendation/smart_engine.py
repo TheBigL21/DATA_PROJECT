@@ -40,13 +40,7 @@ class SmartRecommendationEngine:
     MIN_CONFIDENCE = 0.3  # Minimum confidence multiplier
     MAX_CONFIDENCE = 1.0  # Maximum confidence multiplier
 
-    # Era configurations
-    ERA_CONFIGS = {
-        'fresh': {'min_year': 2020, 'max_year': 2025},
-        'modern': {'min_year': 2015, 'max_year': 2025},
-        'timeless': {'min_year': 2000, 'max_year': 2025},
-        'old_school': {'min_year': 1900, 'max_year': 2025}
-    }
+    # Era configurations now use TimePeriodFilter (no local config needed)
 
     # Evening type modifiers for quality scoring
     EVENING_MODIFIERS = {
@@ -118,7 +112,7 @@ class SmartRecommendationEngine:
         Args:
             user_id: User ID
             genres: List of 1-2 selected genres
-            era: Selected time period ('recent', 'modern', 'any', etc.)
+            era: Selected time period ('new_era', 'millennium', 'old_school', 'golden_era', 'any')
             source_material: Source material preference ('book', 'true_story', 'any', etc.)
             themes: List of thematic keywords selected by user
             session_history: List of {movie_id, action, num_votes, pacing_score} dicts
@@ -191,13 +185,16 @@ class SmartRecommendationEngine:
         already_shown: List[int]
     ) -> pd.DataFrame:
         """
-        Generate candidate movies using STRICT filtering (hard constraints).
+        Generate candidate movies using SOFT filtering (allows near-misses).
 
         HARD FILTERS (non-negotiable):
         - Genre: EXACT match required (at least one selected genre)
-        - Era: STRICT year range (no movies outside selected era, unless 'any')
         - Quality: rating >= quality_floor (6.0)
         - Popularity: num_votes >= 5000
+
+        SOFT FILTERS (scored, not excluded):
+        - Era: Movies outside range get lower scores but aren't excluded
+          (uses TimePeriodFilter for consistent era definitions)
 
         Returns 50-200 high-quality candidates.
         """
@@ -211,29 +208,31 @@ class SmartRecommendationEngine:
         
         genre_mask = self.movies['genres'].apply(matches_genre)
 
-        # HARD FILTER 2: Era match (strict year range)
-        # Use SmartRecommendationEngine's ERA_CONFIGS instead of TimePeriodFilter
-        if era in self.ERA_CONFIGS:
-            config = self.ERA_CONFIGS[era]
-            year_min = config['min_year']
-            year_max = config['max_year']
-            era_mask = (self.movies['year'] >= year_min) & (self.movies['year'] <= year_max)
-        else:
-            # Unknown era or 'any' - no filter
-            logging.warning(f"Unknown era '{era}', applying no era filter")
-            era_mask = pd.Series([True] * len(self.movies))
-
-        # HARD FILTER 3: Quality floor (6.0 minimum)
+        # HARD FILTER 2: Quality floor (6.0 minimum)
         rating_mask = self.movies['avg_rating'] >= quality_floor
 
-        # HARD FILTER 4: Popularity floor (5000 votes minimum)
+        # HARD FILTER 3: Popularity floor (5000 votes minimum)
         popularity_mask = self.movies['num_votes'] >= 5000
 
-        # Apply all hard filters
-        candidates = self.movies[genre_mask & era_mask & rating_mask & popularity_mask].copy()
+        # Apply hard filters (NO era filter here - era is soft)
+        candidates = self.movies[genre_mask & rating_mask & popularity_mask].copy()
 
         # Remove already shown
         candidates = candidates[~candidates['movie_id'].isin(already_shown)]
+
+        # SOFT ERA FILTERING: Score movies by era match, but don't exclude
+        # Movies outside era range get lower scores but can still be candidates
+        # Only exclude movies with very low era scores (< 0.3) to avoid completely irrelevant movies
+        # This allows movies 1-2 years outside range (score ~0.8-0.9) but excludes very old/new ones
+        if era != 'any':
+            era_scores = []
+            for _, row in candidates.iterrows():
+                era_score = TimePeriodFilter.calculate_era_score(row['year'], era)
+                era_scores.append(era_score)
+            
+            # Only exclude movies with very low era scores (< 0.3)
+            era_mask_soft = pd.Series(era_scores) >= 0.3
+            candidates = candidates[era_mask_soft].copy()
 
         # Limit to top 200 by votes (popularity proxy for quality)
         if len(candidates) > 200:
@@ -501,29 +500,15 @@ class SmartRecommendationEngine:
 
     def _get_era_scores(self, candidates: pd.DataFrame, era: str) -> np.ndarray:
         """
-        Calculate era favorability scores.
+        Calculate era favorability scores using TimePeriodFilter.
 
-        Movies in preferred era get 1.0, outside get decay (2% per year, min 0.2).
+        Movies in preferred era get 1.0, outside get decay based on distance.
+        This method is kept for backward compatibility but now uses TimePeriodFilter.
         """
-        config = self.ERA_CONFIGS[era]
-        min_year = config['min_year']
-        max_year = config['max_year']
-
         scores = np.zeros(len(candidates))
 
-        for idx, year in enumerate(candidates['year'].values):
-            if min_year <= year <= max_year:
-                scores[idx] = 1.0
-            else:
-                # Calculate years outside range
-                if year < min_year:
-                    years_outside = min_year - year
-                else:
-                    years_outside = year - max_year
-
-                # Decay: 2% per year, minimum 0.2
-                decay_rate = 0.02
-                scores[idx] = max(0.2, 1.0 - (years_outside * decay_rate))
+        for idx, (_, row) in enumerate(candidates.iterrows()):
+            scores[idx] = TimePeriodFilter.calculate_era_score(row['year'], era)
 
         return scores
 
