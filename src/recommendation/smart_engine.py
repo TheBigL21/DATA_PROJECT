@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 import sys
+import logging
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -200,20 +201,26 @@ class SmartRecommendationEngine:
 
         Returns 50-200 high-quality candidates.
         """
-        # HARD FILTER 1: Genre match (exact)
-        genre_mask = self.movies['genres'].apply(
-            lambda g: any(genre in g for genre in genres) if isinstance(g, (list, np.ndarray)) else False
-        )
+        # HARD FILTER 1: Genre match (case-insensitive)
+        genres_lower = [g.lower().strip() for g in genres]
+        def matches_genre(movie_genres):
+            if not isinstance(movie_genres, (list, np.ndarray)):
+                return False
+            movie_genres_lower = [str(g).lower().strip() for g in movie_genres]
+            return any(genre_lower in movie_genres_lower for genre_lower in genres_lower)
+        
+        genre_mask = self.movies['genres'].apply(matches_genre)
 
         # HARD FILTER 2: Era match (strict year range)
-        from recommendation.time_period_filter import TimePeriodFilter
-        year_min, year_max = TimePeriodFilter.get_year_range(era)
-
-        if year_min is not None and year_max is not None:
-            # Apply strict era filtering
+        # Use SmartRecommendationEngine's ERA_CONFIGS instead of TimePeriodFilter
+        if era in self.ERA_CONFIGS:
+            config = self.ERA_CONFIGS[era]
+            year_min = config['min_year']
+            year_max = config['max_year']
             era_mask = (self.movies['year'] >= year_min) & (self.movies['year'] <= year_max)
         else:
-            # 'any' era - no filter
+            # Unknown era or 'any' - no filter
+            logging.warning(f"Unknown era '{era}', applying no era filter")
             era_mask = pd.Series([True] * len(self.movies))
 
         # HARD FILTER 3: Quality floor (6.0 minimum)

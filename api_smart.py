@@ -247,18 +247,27 @@ def recommend():
 
         movie_ids = engine.recommend(
             user_id=user_id,
-            evening_type=evening_type,
             genres=genres,
             era=era,
-            keywords=keywords,
+            themes=keywords,  # API uses 'keywords' but engine expects 'themes'
             session_history=session_history,
             top_k=top_k
         )
 
+        logger.info(f"  Engine returned {len(movie_ids)} movie IDs")
+
         # Format response
         recommendations = []
         for movie_id in movie_ids:
-            movie = engine.movies[engine.movies['movie_id'] == movie_id].iloc[0]
+            try:
+                movie_df = engine.movies[engine.movies['movie_id'] == movie_id]
+                if len(movie_df) == 0:
+                    logger.warning(f"Movie ID {movie_id} not found in movies DataFrame")
+                    continue
+                movie = movie_df.iloc[0]
+            except Exception as e:
+                logger.error(f"Error accessing movie {movie_id}: {e}")
+                continue
 
             # Calculate combined rating
             imdb_rating = movie['avg_rating']
@@ -287,6 +296,17 @@ def recommend():
             recommendations.append(rec)
 
         logger.info(f"✓ Generated {len(recommendations)} recommendations")
+        
+        if len(recommendations) == 0:
+            logger.warning(f"No recommendations found for genres={genres}, era={era}, keywords={keywords}")
+            logger.warning(f"Total movies in database: {len(engine.movies)}")
+            # Check if any movies match the genres
+            if genres:
+                genre_matches = engine.movies['genres'].apply(
+                    lambda g: any(genre.lower() in str(g).lower() for genre in genres) 
+                    if isinstance(g, (list, tuple, str)) else False
+                )
+                logger.warning(f"Movies matching genres {genres}: {genre_matches.sum()}")
 
         return jsonify({'recommendations': recommendations}), 200
 
