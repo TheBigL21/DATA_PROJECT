@@ -13,69 +13,33 @@ class TimePeriodFilter:
 
     # Era definitions with year ranges
     ERAS = {
-        'new_gen': {
-            'label': 'New Generation (2010+)',
-            'short_label': 'New Gen',
+        'new_era': {
+            'label': 'New Era (2010+)',
+            'short_label': 'New Era',
             'year_min': 2010,
             'year_max': 2030,
-            'description': 'Fresh, modern movies from the last decade'
+            'description': 'Contemporary cinema from the last decade'
         },
         'golden_era': {
-            'label': 'Golden Era (1990-2009)',
+            'label': 'Golden Era (1990-2010)',
             'short_label': 'Golden Era',
             'year_min': 1990,
-            'year_max': 2009,
-            'description': 'Classic 90s and 2000s cinema'
+            'year_max': 2010,
+            'description': 'Two decades of iconic modern cinema'
+        },
+        'millennium': {
+            'label': 'The 2nd Millennium (2000+)',
+            'short_label': '2nd Millennium',
+            'year_min': 2000,
+            'year_max': 2030,
+            'description': '21st century films'
         },
         'old_school': {
-            'label': 'Old School (Before 1990)',
+            'label': 'Old School (Before 2000)',
             'short_label': 'Old School',
             'year_min': 1900,
-            'year_max': 1989,
-            'description': 'Vintage classics and retro films'
-        },
-        # Keep old IDs for backward compatibility in scoring
-        'recent': {
-            'label': 'New Generation (2010+)',
-            'short_label': 'New Gen',
-            'year_min': 2010,
-            'year_max': 2030,
-            'description': 'Fresh, modern movies from the last decade'
-        },
-        'modern': {
-            'label': 'Golden Era (1990-2009)',
-            'short_label': 'Golden Era',
-            'year_min': 1990,
-            'year_max': 2009,
-            'description': 'Classic 90s and 2000s cinema'
-        },
-        'eighties_nineties': {
-            'label': 'Old School (Before 1990)',
-            'short_label': 'Old School',
-            'year_min': 1900,
-            'year_max': 1989,
-            'description': 'Vintage classics and retro films'
-        },
-        'golden_age': {
-            'label': 'Old School (Before 1990)',
-            'short_label': 'Old School',
-            'year_min': 1900,
-            'year_max': 1989,
-            'description': 'Vintage classics and retro films'
-        },
-        'classic': {
-            'label': 'Old School (Before 1990)',
-            'short_label': 'Old School',
-            'year_min': 1900,
-            'year_max': 1989,
-            'description': 'Vintage classics and retro films'
-        },
-        'vintage': {
-            'label': 'Old School (Before 1990)',
-            'short_label': 'Old School',
-            'year_min': 1900,
-            'year_max': 1989,
-            'description': 'Vintage classics and retro films'
+            'year_max': 1999,
+            'description': 'Classic cinema from the 20th century'
         },
         'any': {
             'label': "Doesn't matter",
@@ -86,16 +50,24 @@ class TimePeriodFilter:
         }
     }
 
+    # Backward compatibility mapping (old IDs → new IDs)
+    BACKWARD_COMPATIBLE_ERAS = {
+        'new_gen': 'new_era',
+        'recent': 'new_era',
+        'modern': 'millennium',
+        'throwback': 'golden_era'
+    }
+
     @classmethod
     def get_era_options(cls) -> list:
         """
-        Get list of era options for display (3 main options + any).
+        Get list of era options for display (5 options).
 
         Returns:
             List of dicts with era info
         """
-        # Return the 3 main era options + "doesn't matter"
-        main_eras = ['new_gen', 'golden_era', 'old_school', 'any']
+        # Return the 5 era options
+        main_eras = ['new_era', 'golden_era', 'millennium', 'old_school', 'any']
         return [
             {
                 'id': era_id,
@@ -117,6 +89,10 @@ class TimePeriodFilter:
         Returns:
             Tuple of (min_year, max_year). Returns (None, None) for 'any'
         """
+        # Map old era IDs to new ones for backward compatibility
+        if era_id in cls.BACKWARD_COMPATIBLE_ERAS:
+            era_id = cls.BACKWARD_COMPATIBLE_ERAS[era_id]
+
         if era_id not in cls.ERAS:
             return None, None
 

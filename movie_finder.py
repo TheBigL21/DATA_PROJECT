@@ -7,6 +7,7 @@ Updated with inference-based keyword system
 from pathlib import Path
 import sys
 import json
+from tkinter import E
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -129,25 +130,23 @@ def ask_genres(evening_type, genre_config):
 def ask_era():
     """Q3: Time Period/Era Selection"""
     print("\n" + "-"*60)
-    print("What vibe are you feeling?\n")
+    print("What time period are you in the mood for?\n")
 
     era_options = TimePeriodFilter.get_era_options()
 
-    # Display only the label without description
-    print("  1. New Generation (2010+)")
-    print("  2. Golden Era (1990-2009)")
-    print("  3. Old School (Before 1990)")
-    print("  4. Doesn't matter")
+    # Display all 5 era options
+    for i, era in enumerate(era_options, 1):
+        print(f"  {i}. {era['label']}")
 
     while True:
-        choice = input("\nSelect vibe (1-4): ").strip()
+        choice = input("\nSelect era (1-5): ").strip()
 
         if choice.isdigit() and 1 <= int(choice) <= len(era_options):
             selected_era = era_options[int(choice) - 1]
             print(f"Selected: {selected_era['label']}")
             return selected_era['id']
 
-        print("Invalid choice. Please enter a number 1-4.")
+        print("Invalid choice. Please enter a number 1-5.")
 
 
 

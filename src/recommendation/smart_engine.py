@@ -25,12 +25,19 @@ from recommendation.inference_engine import (
 )
 from recommendation.time_period_filter import TimePeriodFilter
 from recommendation.source_material_filter import SourceMaterialFilter
+from recommendation.age_keywords import calculate_age_score
+from recommendation.pacing_calculator import calculate_pacing_match
 
 
 class SmartRecommendationEngine:
     """
     Smart recommendation engine with Option C quality scoring and keyword matching.
     """
+
+    # Vote confidence constants
+    MAX_VOTES_NORMALIZATION = 2_000_000  # Reference point for vote confidence
+    MIN_CONFIDENCE = 0.3  # Minimum confidence multiplier
+    MAX_CONFIDENCE = 1.0  # Maximum confidence multiplier
 
     # Era configurations
     ERA_CONFIGS = {
@@ -78,6 +85,22 @@ class SmartRecommendationEngine:
         self.w_quality_kw = 0.15    # Quality score (dynamically adjusted)
         self.w_session_kw = 0.10    # Session similarity
 
+    def _calculate_vote_confidence(self, num_votes: int) -> float:
+        """
+        Calculate confidence multiplier from vote count.
+
+        Uses logarithmic scaling to reward movies with more votes.
+        Clamps result between MIN_CONFIDENCE and MAX_CONFIDENCE.
+
+        Args:
+            num_votes: Number of votes for the movie
+
+        Returns:
+            Confidence multiplier in range [0.3, 1.0]
+        """
+        confidence = np.log1p(num_votes) / np.log1p(self.MAX_VOTES_NORMALIZATION)
+        return max(self.MIN_CONFIDENCE, min(self.MAX_CONFIDENCE, confidence))
+
     def recommend(
         self,
         user_id: int,
@@ -123,23 +146,13 @@ class SmartRecommendationEngine:
         candidates = self._generate_candidates(
             user_id=user_id,
             genres=genres,
-            quality_floor=7.0,  # Base quality floor
+            era=era,
+            quality_floor=6.0,  # Quality floor set to 6.0
             session_positive_movies=session_positive,
             already_shown=already_shown
         )
 
-        if len(candidates) < top_k:
-            # Not enough candidates, relax quality filter
-            print(f"Warning: Only {len(candidates)} candidates found, relaxing filters...")
-            candidates = self._generate_candidates(
-                user_id=user_id,
-                genres=genres,
-                quality_floor=6.0,  # Fallback to minimum quality
-                session_positive_movies=session_positive,
-                already_shown=already_shown
-            )
-
-        # STAGE 2: Score all candidates
+        # STAGE 2: Score all candidates (strict scoring)
         scores = self._score_candidates_new(
             candidates=candidates,
             user_id=user_id,
@@ -151,71 +164,75 @@ class SmartRecommendationEngine:
             session_history=session_history
         )
 
+        # Store strict scores for interactive selector (80/20 split)
+        self.strict_scores = dict(zip(candidates['movie_id'].tolist(), scores))
+
         # STAGE 3: Sort and return top K
         top_indices = np.argsort(scores)[-top_k:][::-1]
         return candidates.iloc[top_indices]['movie_id'].tolist()
+
+    def get_strict_scores(self) -> Dict[int, float]:
+        """
+        Get strict scores for all candidates (used by InteractiveSelector).
+
+        Returns:
+            Dict mapping movie_id → strict score [0.0, 1.0]
+        """
+        return getattr(self, 'strict_scores', {})
 
     def _generate_candidates(
         self,
         user_id: int,
         genres: List[str],
+        era: str,
         quality_floor: float,
         session_positive_movies: List[int],
         already_shown: List[int]
     ) -> pd.DataFrame:
         """
-        Generate candidate movies using genre + quality filtering.
+        Generate candidate movies using STRICT filtering (hard constraints).
 
-        Quality floor is inferred from user's keyword selections.
+        HARD FILTERS (non-negotiable):
+        - Genre: EXACT match required (at least one selected genre)
+        - Era: STRICT year range (no movies outside selected era, unless 'any')
+        - Quality: rating >= quality_floor (6.0)
+        - Popularity: num_votes >= 5000
 
-        Returns ~500-1000 candidates.
+        Returns 50-200 high-quality candidates.
         """
-        candidates = set()
-
-        # Source 1: Genre filtering (hard constraint) + inferred quality floor
+        # HARD FILTER 1: Genre match (exact)
         genre_mask = self.movies['genres'].apply(
             lambda g: any(genre in g for genre in genres) if isinstance(g, (list, np.ndarray)) else False
         )
+
+        # HARD FILTER 2: Era match (strict year range)
+        from recommendation.time_period_filter import TimePeriodFilter
+        year_min, year_max = TimePeriodFilter.get_year_range(era)
+
+        if year_min is not None and year_max is not None:
+            # Apply strict era filtering
+            era_mask = (self.movies['year'] >= year_min) & (self.movies['year'] <= year_max)
+        else:
+            # 'any' era - no filter
+            era_mask = pd.Series([True] * len(self.movies))
+
+        # HARD FILTER 3: Quality floor (6.0 minimum)
         rating_mask = self.movies['avg_rating'] >= quality_floor
-        genre_movies = self.movies[genre_mask & rating_mask]
-        candidates.update(genre_movies['movie_id'].tolist())
 
-        # Source 2: CF top predictions
-        if hasattr(self.base_engine, 'cf_model') and self.base_engine.cf_model:
-            try:
-                cf_predictions = self.base_engine.cf_model.recommend(
-                    user_id,
-                    top_k=300
-                )
-                # Filter by genre
-                cf_filtered = [mid for mid in cf_predictions if mid in genre_movies['movie_id'].values]
-                candidates.update(cf_filtered[:200])
-            except:
-                pass
+        # HARD FILTER 4: Popularity floor (5000 votes minimum)
+        popularity_mask = self.movies['num_votes'] >= 5000
 
-        # Source 3: Graph neighbors of session movies
-        if session_positive_movies and hasattr(self.base_engine, 'graph'):
-            for movie_id in session_positive_movies[-3:]:  # Last 3 positive movies
-                try:
-                    neighbors = self.base_engine.graph.get_neighbors(movie_id, top_k=50)
-                    neighbor_ids = [nid for nid, weight in neighbors]
-                    # Filter by genre
-                    neighbor_filtered = [mid for mid in neighbor_ids if mid in genre_movies['movie_id'].values]
-                    candidates.update(neighbor_filtered[:30])
-                except:
-                    pass
-
-        # Source 4: Popular movies in genre (cold start)
-        popular = genre_movies.nlargest(100, 'num_votes')
-        candidates.update(popular['movie_id'].tolist())
+        # Apply all hard filters
+        candidates = self.movies[genre_mask & era_mask & rating_mask & popularity_mask].copy()
 
         # Remove already shown
-        candidates -= set(already_shown)
+        candidates = candidates[~candidates['movie_id'].isin(already_shown)]
 
-        # Convert to DataFrame
-        candidate_df = self.movies[self.movies['movie_id'].isin(candidates)].copy()
+        # Limit to top 200 by votes (popularity proxy for quality)
+        if len(candidates) > 200:
+            candidates = candidates.nlargest(200, 'num_votes')
 
-        return candidate_df
+        return candidates
 
     def _score_candidates(
         self,
@@ -357,7 +374,7 @@ class SmartRecommendationEngine:
             try:
                 score = self.base_engine.cf_model.predict(user_id, movie_id)
                 scores[i] = (score + 1) / 2  # Normalize from [-1, 1] to [0, 1]
-            except:
+            except Exception:
                 scores[i] = 0.5
 
         return scores
@@ -375,7 +392,7 @@ class SmartRecommendationEngine:
                     neighbors = dict(self.base_engine.graph.get_neighbors(pos_movie, top_k=100))
                     if movie_id in neighbors:
                         max_similarity = max(max_similarity, neighbors[movie_id])
-                except:
+                except Exception:
                     pass
             scores[i] = min(1.0, max_similarity)
 
@@ -468,9 +485,7 @@ class SmartRecommendationEngine:
         base_quality = max(0.0, min(1.0, base_quality))
 
         # Step 2: Smooth confidence multiplier (log-scale)
-        import numpy as np
-        confidence = np.log1p(num_votes) / np.log1p(2_000_000)
-        confidence = max(0.3, min(1.0, confidence))  # Floor at 0.3, cap at 1.0
+        confidence = self._calculate_vote_confidence(num_votes)
 
         # Step 3: Combine (no evening modifier - quality is quality)
         quality_score = base_quality * confidence
@@ -651,8 +666,7 @@ class SmartRecommendationEngine:
 
             # Confidence based on vote count
             num_votes = row['num_votes']
-            confidence = np.log1p(num_votes) / np.log1p(2_000_000)
-            confidence = max(0.3, min(1.0, confidence))
+            confidence = self._calculate_vote_confidence(num_votes)
 
             scores[idx] = base_quality * confidence
 
@@ -794,22 +808,20 @@ class SmartRecommendationEngine:
         for idx, (_, row) in enumerate(candidates.iterrows()):
             score_components = []
 
-            # 1. Genre matching (30%)
+            # 1. Genre matching (40%, increased from 30%)
             movie_genres = set(row['genres']) if isinstance(row['genres'], (list, np.ndarray)) else set()
             genre_set = set(genres)
             genre_overlap = len(movie_genres & genre_set) / len(genre_set) if genre_set else 0
-            score_components.append(genre_overlap * 0.30)
+            score_components.append(genre_overlap * 0.40)
 
-            # 2. Era matching (20%)
+            # 2. Era matching (20%, unchanged)
             era_score = TimePeriodFilter.calculate_era_score(row['year'], era)
             score_components.append(era_score * 0.20)
 
-            # 3. Source material matching (15%)
-            movie_keywords = row.get('keywords', [])
-            source_score = SourceMaterialFilter.calculate_source_score(movie_keywords, source_material)
-            score_components.append(source_score * 0.15)
+            # 3. Source material REMOVED (was 15%, redistributed to genre +10%, keywords +5%)
 
-            # 4. Theme keywords matching (25%)
+            # 4. Theme keywords matching (30%, increased from 25%)
+            movie_keywords = row.get('keywords', [])
             if themes:
                 theme_matches = 0
                 if isinstance(movie_keywords, (list, np.ndarray)):
@@ -819,11 +831,11 @@ class SmartRecommendationEngine:
                             theme_matches += 1
 
                 theme_score = theme_matches / len(themes) if themes else 0
-                score_components.append(theme_score * 0.25)
+                score_components.append(theme_score * 0.30)
             else:
-                score_components.append(0.0)
+                score_components.append(0.30)  # Full score if no themes specified
 
-            # 5. Quality score (10%)
+            # 5. Quality score (10%, unchanged for now)
             quality = self._calculate_simple_quality(row)
             score_components.append(quality * 0.10)
 
@@ -841,8 +853,7 @@ class SmartRecommendationEngine:
         rating_score = max(0.0, min(1.0, rating_score))
 
         # Vote confidence
-        confidence = np.log1p(num_votes) / np.log1p(2_000_000)
-        confidence = max(0.3, min(1.0, confidence))
+        confidence = self._calculate_vote_confidence(num_votes)
 
         return rating_score * confidence
 
