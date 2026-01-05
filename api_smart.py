@@ -14,13 +14,13 @@ Usage:
 
 Then access at http://localhost:5000
 """
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pathlib import Path
 import sys
 import logging
 import json
+import pandas as pd
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -34,6 +34,9 @@ from recommendation.keyword_recommender import KeywordRecommender  # type: ignor
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configure pandas to suppress chained assignment warnings
+pd.options.mode.chained_assignment = None
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -510,11 +513,6 @@ def record_feedback():
 
 
 if __name__ == '__main__':
-    import pandas as pd
-
-    # Add pandas import at top level
-    pd.options.mode.chained_assignment = None
-
     logger.info("="*60)
     logger.info("SMART RECOMMENDATION API SERVER")
     logger.info("="*60)
