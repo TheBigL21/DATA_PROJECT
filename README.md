@@ -108,73 +108,126 @@ Movie Finder uses a three-stage pipeline to transform your preferences into reco
 
 ### User Flow
 
-![Landing Page - Evening Type Selection](images/landing_page.png)
-*Step 1: User selects evening type (Date Night, Family, Friends, Chill Evening)*
+The recommendation process begins with a simple questionnaire that captures your preferences and context. Each step collects information that helps the system understand what you're looking for.
 
-![Genre Selection Interface](images/genre_selection.png)
-*Step 2: User selects 1-2 genres*
+![Landing Page](images/landing_page.png)
 
-![Era Selection Interface](images/era_selection.png)
-*Step 3: User selects era (optional)*
+**Step 1: Landing Page**
 
-![Theme/Keyword Selection](images/keyword_selection.png)
-*Step 4: User adds themes/keywords (optional)*
+The application starts with a clean landing page where you can begin your movie discovery journey. You can get started immediately, sign up to save your preferences, or skip directly to the questionnaire. The interface highlights that the process takes only four questions and promises personalized recommendations.
 
-![Movie Recommendation Card](images/movie_card.png)
-*Step 5: System displays movie cards one at a time*
+![Evening Type Selection](images/evening_type_selection.png)
 
-![Swipe Interface Demonstration](images/swipe_actions.png)
-*Step 6: User swipes (YES/NO/FINAL) - system learns and adapts*
+**Step 2: Select Your Evening Type**
+
+The first question asks about your plan for the evening. This context is crucial because the system learns that your movie preferences vary depending on the situation. You choose from four options:
+
+- **Chill Evening by myself**: For relaxed solo viewing when you're open to experimenting
+- **Date Night**: For impressive movies that work well for a special evening
+- **Family Night**: For safe, reliable entertainment suitable for everyone
+- **Friends Night**: For fun social viewing experiences
+
+The system remembers your preferences for each context separately, so it can recommend action movies for date nights while suggesting comedies for family nights.
+
+![Genre Selection](images/genre_selection.png)
+
+**Step 3: Choose Your Genres**
+
+Next, you select one or two genres from a curated list. Popular choices like Thriller, Drama, Sci-Fi, Mystery, Horror, and Documentary are prominently displayed, with additional genres available below. This selection forms the primary filter for candidate movies, ensuring recommendations match your preferred style.
+
+![Time Period Selection](images/time_period_selection.png)
+
+**Step 4: Select Time Period**
+
+You choose the era you're in the mood for. Options range from contemporary cinema (2010+) to classic films (before 2000), or you can indicate no preference. This helps the system filter candidates to match your temporal preferences, whether you want something modern or nostalgic.
+
+![Theme Selection](images/theme_selection.png)
+
+**Step 5: Add Themes and Keywords**
+
+You can optionally select up to three themes that interest you, such as Revenge, Martial Arts, Serial Killer, Gangster, Detective, or Dystopia. There's also an option for movies based on comics or manga. These keywords are matched against movie descriptions and metadata to find films with similar thematic elements.
+
+![Movie Recommendation Card](images/movie_recommendation_card.png)
+
+**Step 6: Review Recommendations**
+
+Once you've completed the questionnaire, the system displays movie recommendations one at a time. Each card shows the movie title, release year, rating, duration, director, and a synopsis. The interface uses a swipe-based interaction model where you can:
+
+- Swipe right or click "YES" to indicate interest
+- Swipe left or click "NOPE" to reject
+- Click "THAT'S THE ONE!" to select your final choice
+
+As you interact with each recommendation, the system learns from your feedback and adjusts subsequent suggestions in real-time. Your preferences are stored with the full context of your selection (genres, era, themes, evening type), allowing the system to remember what works for similar situations in future sessions.
 
 ### Recommendation Process
 
+Behind the scenes, the system processes your preferences through three stages to deliver personalized recommendations.
+
 **Stage 1: Candidate Generation**
 
-The system starts with 45,207 movies from IMDb and applies quality filters:
-- Genre matching - Only movies in your selected genres
-- Quality floor - Minimum 6.0 rating
-- Popularity threshold - At least 5,000 votes
-- Era filtering - Respects your time period preferences
+The system starts with a database of 45,207 movies from IMDb, enriched with metadata from TMDb. Before any scoring begins, it applies strict quality filters to ensure only worthwhile movies are considered:
 
-This results in a pool of 50-200 high-quality candidates ready for scoring.
+- **Genre matching**: Only movies that match your selected genres are included
+- **Quality floor**: Movies must have a minimum rating of 6.0 out of 10
+- **Popularity threshold**: Movies need at least 5,000 user votes to ensure they're well-known enough
+- **Era filtering**: Movies are filtered based on your time period preference
+
+These filters reduce the pool from 45,000+ movies down to 50-200 high-quality candidates that match your basic criteria. This focused pool ensures the system only considers movies worth recommending.
 
 **Stage 2: Hybrid Scoring**
 
-Each candidate movie gets scored using multiple components:
+Each candidate movie receives a score calculated from multiple components. The system combines explicit preferences, machine learning insights, and content analysis to determine how well each movie matches your taste.
 
-**Explicit Components (70% weight):**
-- Genre match: 30% - Does it match your selected genres?
-- Era match: 15% - Is it from your preferred time period?
-- Theme keywords: 20% - Does it contain your thematic keywords?
-- Quality score: 5% - How highly rated is it?
+**Explicit Components (70% of the score):**
+These components directly reflect your stated preferences:
+- **Genre match (30%)**: How well the movie matches your selected genres
+- **Era match (15%)**: Whether the movie falls within your preferred time period
+- **Theme keywords (20%)**: How many of your selected themes appear in the movie's description or metadata
+- **Quality score (5%)**: The movie's rating normalized to a 0-1 scale
 
-**ML Components (25% weight):**
-- Collaborative Filtering (15%) - Uses patterns from similar users
-- Co-occurrence Graph (10%) - Uses movies that are watched together
+**Machine Learning Components (25% of the score):**
+These components learn patterns from user behavior:
+- **Collaborative Filtering (15%)**: Identifies movies that users with similar preferences have enjoyed, using matrix factorization on interaction data
+- **Co-occurrence Graph (10%)**: Uses a graph of movies that are frequently watched together to find related recommendations
 
-**Content Similarity (5% weight):**
-- TF-IDF cosine similarity - Finds movies with similar themes/descriptions
+**Content Similarity (5% of the score):**
+- **TF-IDF cosine similarity**: Analyzes movie descriptions and plots to find films with similar themes and narrative elements, even if they don't share exact keywords
 
 **Adaptive Adjustments:**
-- Feedback Adjustment (±10%) - Boosts movies similar to ones you liked, penalizes ones like those you rejected
-- Compatibility Score (±5%) - Remembers context-specific preferences (e.g., "You love action movies for date night")
+The system continuously learns from your feedback:
+- **Feedback Adjustment (±10%)**: Movies similar to ones you've liked receive a boost, while movies similar to ones you've rejected are penalized
+- **Compatibility Score (±5%)**: Remembers context-specific preferences. For example, if you consistently like action movies for date nights, future date night recommendations will favor action films
 
 **Stage 3: Ranking & Delivery**
 
-All scores are combined into a final weighted score, movies are ranked, and the top 10-20 are returned. This happens in under 200ms.
+All scoring components are combined into a single weighted score for each movie. The candidates are ranked from highest to lowest score, and the top 10-20 movies are returned to you. This entire process completes in under 200 milliseconds, ensuring instant recommendations as you swipe through movies.
 
 ### The Learning Loop
 
-The system learns from every interaction:
+What makes Movie Finder different from static recommendation systems is its ability to learn and adapt from every interaction. The system doesn't just use your preferences once and forget them—it builds a memory of what works for you in different contexts.
 
-Every time you swipe:
-1. Your feedback is recorded with full context (genres, era, themes)
-2. A selection signature is created - a unique hash of your preferences
-3. Compatibility scores update - YES adds +0.1, NO subtracts -0.1
-4. Everything is stored in the feedback database for cross-session learning
-5. Next recommendations adapt - The system remembers what worked for similar contexts
+**How Learning Works:**
 
-The more you use it, the better it gets. First session gives good recommendations based on your explicit preferences. Second session is better because it remembers your past preferences. By the tenth session, the system has learned a lot about your taste.
+Every time you interact with a movie recommendation, the system records your feedback along with the complete context of your selection:
+
+1. **Feedback Recording**: Your response (YES, NO, or FINAL) is stored with all the details: which genres you selected, what time period you chose, which themes interested you, and what type of evening you planned for.
+
+2. **Selection Signature**: The system creates a unique identifier (hash) for your combination of preferences. This allows it to recognize when you make similar selections in the future.
+
+3. **Compatibility Updates**: For each movie you interact with, the system updates compatibility scores. When you say YES, it adds 0.1 to the compatibility score. When you say NO, it subtracts 0.1. These scores accumulate over time, building a profile of what works for each specific context.
+
+4. **Persistent Storage**: All feedback is stored in a SQLite database, allowing the system to remember your preferences across sessions. If you close the application and return later, your learning history is preserved.
+
+5. **Real-time Adaptation**: As you continue swiping, the system immediately adjusts subsequent recommendations. Movies similar to ones you liked receive higher scores, while movies similar to ones you rejected are deprioritized.
+
+**Progressive Improvement:**
+
+The system gets better with each use:
+- **First session**: Recommendations are based on your explicit preferences (genres, era, themes) combined with general patterns from other users
+- **Second session**: The system remembers your past preferences and applies them when you make similar selections
+- **Tenth session**: By this point, the system has learned your specific taste patterns and can predict what you'll like with high accuracy
+
+This learning happens automatically in the background. You don't need to do anything special—just use the system naturally, and it adapts to your preferences over time.
 
 ---
 
