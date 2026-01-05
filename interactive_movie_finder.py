@@ -17,6 +17,7 @@ import sys
 import uuid
 from datetime import datetime
 import json
+import logging
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -69,7 +70,8 @@ def clear_screen():
 
 def load_genre_config():
     """Load genre allocation config"""
-    with open('config/genre_allocation.json', 'r') as f:
+    config_path = Path(__file__).parent / 'config' / 'genre_allocation.json'
+    with open(config_path, 'r') as f:
         return json.load(f)
 
 
@@ -299,7 +301,6 @@ def ask_thematic_keywords(selected_genres, keyword_recommender):
         print("\nThemes selected:")
         for kw in selected:
             print(f"  - {kw.replace('_', ' ').title()}")
-
     if selected_source:
         print(f"  - {source_display}")
 
@@ -424,6 +425,21 @@ def run_interactive_selection(
             last_movie_id=last_movie_id
         )
 
+        # Update persistent feedback learner (NEW: integrates with ML system)
+        try:
+            smart_engine.update_feedback(
+                user_id=user_id,
+                session_id=session_id,
+                movie_id=movie_id,
+                action=action,
+                context=context,
+                position_in_session=position,
+                previous_movie_id=last_movie_id
+            )
+        except Exception as e:
+            # Log but don't fail if feedback update fails
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to update persistent feedback: {e}")
 
         # Display feedback message after processing
         if action == 'yes':
@@ -431,7 +447,7 @@ def run_interactive_selection(
         elif action == 'no':
             print("Searching different movies...\n")
 
-        # Log event
+        # Log event (for interactive selector's own learning)
         event = FeedbackEvent(
             user_id=user_id,
             session_id=session_id,
@@ -445,7 +461,7 @@ def run_interactive_selection(
         )
         storage.log_event(event)
 
-        # Track history
+        # Track history (format matches what recommend() expects)
         session_history.append({
             'movie_id': movie_id,
             'action': action,
@@ -519,11 +535,13 @@ def main():
     # Print welcome
     print_header()
 
-    # Configuration
-    models_dir = Path('output/models')
-    movies_path = Path('output/processed/movies.parquet')
-    keyword_db_path = Path('output/models/keyword_database.pkl')
-    storage_dir = Path('output/interactive_learning')
+    # Configuration - Use absolute paths based on script location
+    SCRIPT_DIR = Path(__file__).parent
+    models_dir = SCRIPT_DIR / 'output' / 'models'
+    movies_path = SCRIPT_DIR / 'output' / 'processed' / 'movies.parquet'
+    keyword_db_path = SCRIPT_DIR / 'output' / 'models' / 'keyword_database.pkl'
+    feedback_db_path = SCRIPT_DIR / 'output' / 'feedback.db'
+    storage_dir = SCRIPT_DIR / 'output' / 'interactive_learning'
 
     user_id = 0  # Demo user ID (in production, use actual user ID)
     session_id = str(uuid.uuid4())[:8]
@@ -533,12 +551,14 @@ def main():
     print("  - Loading collaborative filtering model...")
     print("  - Loading co-occurrence graph...")
     print("  - Loading movie database...")
+    print("  - Loading feedback learning system...")
 
     try:
         smart_engine = load_smart_system(
             models_dir,
             movies_path,
-            keyword_db_path if keyword_db_path.exists() else None
+            keyword_db_path if keyword_db_path.exists() else None,
+            feedback_db_path=feedback_db_path
         )
         movies_df = pd.read_parquet(movies_path)
         genre_config = load_genre_config()
@@ -606,6 +626,7 @@ def main():
             source_material=context['source_material'],
             themes=context['themes'],
             session_history=[],
+            session_id=session_id,
             top_k=100
         )
 

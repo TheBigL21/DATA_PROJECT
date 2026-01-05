@@ -48,10 +48,11 @@ SCRIPT_DIR = Path(__file__).parent
 MODELS_DIR = SCRIPT_DIR / "output" / "models"
 MOVIES_PATH = SCRIPT_DIR / "output" / "processed" / "movies.parquet"
 KEYWORD_DB_PATH = SCRIPT_DIR / "output" / "models" / "keyword_database.pkl"
+FEEDBACK_DB_PATH = SCRIPT_DIR / "output" / "feedback.db"
 
 logger.info("Loading smart recommendation system...")
 try:
-    engine = load_smart_system(MODELS_DIR, MOVIES_PATH, KEYWORD_DB_PATH)
+    engine = load_smart_system(MODELS_DIR, MOVIES_PATH, KEYWORD_DB_PATH, FEEDBACK_DB_PATH)
     
     # CRITICAL FILTER: Ensure only movies with >=1000 votes are used
     # This ensures consistency even if the parquet file wasn't properly filtered
@@ -70,6 +71,8 @@ try:
     logger.info("✓ Smart system loaded successfully")
     logger.info(f"  - {len(engine.movies):,} movies")
     logger.info(f"  - Keyword analyzer: {'✓' if engine.keyword_analyzer else '✗'}")
+    logger.info(f"  - Content Similarity: {'✓' if engine.content_similarity else '✗'}")
+    logger.info(f"  - Feedback Learner: {'✓' if engine.feedback_learner else '✗'}")
     
     # Initialize KeywordRecommender (same as interactive_movie_finder.py)
     # Wrap in try-except to handle gracefully if it fails
@@ -381,6 +384,10 @@ def recommend():
         logger.info(f"Generating recommendations for user {user_id}")
         logger.info(f"  Evening: {evening_type}, Genres: {genres}, Era: {era}, Keywords: {keywords}, Source Material: {source_material}")
 
+        # Extract session_id from request or generate one
+        import time
+        session_id = data.get('session_id', f'session_{user_id}_{int(time.time())}')
+        
         movie_ids = engine.recommend(
             user_id=user_id,
             genres=genres,
@@ -388,6 +395,7 @@ def recommend():
             source_material=source_material,
             themes=keywords,  # API uses 'keywords' but engine expects 'themes'
             session_history=session_history,
+            session_id=session_id,  # Pass session_id for cross-session learning
             top_k=top_k
         )
 
@@ -493,14 +501,19 @@ def get_movie(movie_id):
 @app.route('/api/feedback', methods=['POST'])
 def record_feedback():
     """
-    Record user feedback (for future model updates).
+    Record user feedback and persist to database (remembers across sessions).
 
     Request:
     {
         "user_id": int,
+        "session_id": str (optional, auto-generated if not provided),
         "movie_id": int,
-        "action": "left|right|up",
-        "timestamp": int (optional)
+        "action": "yes|no|final|left|right|up",
+        "genres": [str] (optional, for context),
+        "era": str (optional, for context),
+        "themes": [str] (optional, for context),
+        "position_in_session": int (optional),
+        "previous_movie_id": int (optional)
     }
 
     Response:
@@ -509,21 +522,47 @@ def record_feedback():
     }
     """
     try:
+        import time
         data = request.get_json()
 
-        # Validate
+        # Validate required fields
         required_fields = ['user_id', 'movie_id', 'action']
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
-        # Log feedback (in production, save to database)
-        logger.info(f"Feedback: user={data['user_id']}, movie={data['movie_id']}, action={data['action']}")
-
+        user_id = data['user_id']
+        movie_id = data['movie_id']
+        action = data['action']
+        session_id = data.get('session_id', f'session_{user_id}_{int(time.time())}')
+        
+        # Build context from request
+        context = {
+            'genres': data.get('genres', []),
+            'era': data.get('era', 'any'),
+            'themes': data.get('themes', [])
+        }
+        
+        # Persist feedback to database
+        engine.update_feedback(
+            user_id=user_id,
+            session_id=session_id,
+            movie_id=movie_id,
+            action=action,
+            context=context,
+            position_in_session=data.get('position_in_session', 0),
+            previous_movie_id=data.get('previous_movie_id')
+        )
+        
+        # Also log for debugging
+        logger.info(f"Feedback persisted: user={user_id}, movie={movie_id}, action={action}, session={session_id}")
+        
         return jsonify({'status': 'ok'}), 200
 
     except Exception as e:
         logger.error(f"Error in record_feedback: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

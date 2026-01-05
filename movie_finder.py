@@ -7,6 +7,7 @@ Updated with inference-based keyword system
 from pathlib import Path
 import sys
 import json
+import uuid
 from tkinter import E
 import pandas as pd
 
@@ -28,7 +29,8 @@ def clear_screen():
 
 def load_genre_config():
     """Load genre allocation config"""
-    with open('config/genre_allocation.json', 'r') as f:
+    config_path = Path(__file__).parent / 'config' / 'genre_allocation.json'
+    with open(config_path, 'r') as f:
         return json.load(f)
 
 
@@ -275,7 +277,7 @@ def ask_thematic_keywords(selected_genres, keyword_recommender):
     return selected
 
 
-def display_recommendations(engine, user_answers, user_data):
+def display_recommendations(engine, user_answers, user_data, session_id=None):
     """Generate and display recommendations"""
     clear_screen()
     print("\n" + "="*60)
@@ -309,6 +311,10 @@ def display_recommendations(engine, user_answers, user_data):
 
     # Generate recommendations
     try:
+        # Create session_id if not provided
+        if session_id is None:
+            session_id = str(uuid.uuid4())[:8]
+        
         recommendations = engine.recommend(
             user_id=0,
             genres=user_answers['genres'],
@@ -316,6 +322,7 @@ def display_recommendations(engine, user_answers, user_data):
             source_material=user_answers.get('source_material'),
             themes=user_answers.get('themes', []),
             session_history=[],
+            session_id=session_id,
             top_k=10
         )
 
@@ -368,10 +375,18 @@ def main():
     # STEP 2: Load recommendation systems
     print("\nInitializing Movie Finder...")
     try:
-        models_dir = Path('./output/models')
-        movies_path = Path('./output/processed/movies.parquet')
-        keyword_db_path = Path('./output/models/keyword_database.pkl')
-        engine = load_smart_system(models_dir, movies_path, keyword_db_path)
+        # Use absolute paths based on script location
+        SCRIPT_DIR = Path(__file__).parent
+        models_dir = SCRIPT_DIR / 'output' / 'models'
+        movies_path = SCRIPT_DIR / 'output' / 'processed' / 'movies.parquet'
+        keyword_db_path = SCRIPT_DIR / 'output' / 'models' / 'keyword_database.pkl'
+        feedback_db_path = SCRIPT_DIR / 'output' / 'feedback.db'
+        engine = load_smart_system(
+            models_dir, 
+            movies_path, 
+            keyword_db_path,
+            feedback_db_path=feedback_db_path
+        )
         genre_config = load_genre_config()
         analytics = GenreAnalytics()
         keyword_recommender = KeywordRecommender(str(movies_path))
@@ -411,8 +426,11 @@ def main():
         'themes': themes_only
     }
 
+    # Create session ID for this recommendation session
+    session_id = str(uuid.uuid4())[:8]
+
     # STEP 4: Generate and display recommendations
-    success = display_recommendations(engine, user_answers, user_data)
+    success = display_recommendations(engine, user_answers, user_data, session_id=session_id)
 
     if success:
         print("\n" + "="*60)

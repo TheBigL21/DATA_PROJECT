@@ -14,6 +14,9 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 import sys
 import logging
+import sqlite3
+import json
+from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -28,6 +31,580 @@ from recommendation.time_period_filter import TimePeriodFilter
 from recommendation.source_material_filter import SourceMaterialFilter
 from recommendation.age_keywords import calculate_age_score
 from recommendation.pacing_calculator import calculate_pacing_match
+
+
+class PersistentFeedbackLearner:
+    """Feedback learner that persists to SQLite database - remembers across ALL sessions"""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_database()
+    
+    def _init_database(self):
+        """Create database tables if they don't exist"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create user_feedback table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                context_genres TEXT,
+                context_era TEXT,
+                context_themes TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                position_in_session INTEGER,
+                previous_movie_id INTEGER
+            )
+        """)
+        
+        # Create user_preferences table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                liked_genres TEXT,
+                liked_eras TEXT,
+                liked_keywords TEXT,
+                rejected_genres TEXT,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create movie_statistics table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS movie_statistics (
+                movie_id INTEGER PRIMARY KEY,
+                total_shown INTEGER DEFAULT 0,
+                total_liked INTEGER DEFAULT 0,
+                total_rejected INTEGER DEFAULT 0,
+                avg_satisfaction REAL DEFAULT 0.0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create indexes
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_feedback_user_id 
+            ON user_feedback(user_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_feedback_timestamp 
+            ON user_feedback(timestamp DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_feedback_user_session 
+            ON user_feedback(user_id, session_id)
+        """)
+        
+        # Create selection_movie_compatibility table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS selection_movie_compatibility (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                movie_id INTEGER NOT NULL,
+                selection_signature TEXT NOT NULL,
+                compatibility_score REAL DEFAULT 0.0,
+                interaction_count INTEGER DEFAULT 0,
+                last_interaction DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, movie_id, selection_signature)
+            )
+        """)
+        
+        # Create indexes for compatibility table
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_compatibility_user_selection 
+            ON selection_movie_compatibility(user_id, selection_signature)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_compatibility_movie 
+            ON selection_movie_compatibility(movie_id)
+        """)
+        
+        conn.commit()
+        conn.close()
+    
+    def log_feedback(
+        self,
+        user_id: int,
+        session_id: str,
+        movie_id: int,
+        action: str,
+        context: Dict,
+        position_in_session: int = 0,
+        previous_movie_id: Optional[int] = None
+    ):
+        """Log user feedback to database (persists across sessions)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Normalize action
+        normalized_action = self._normalize_action(action)
+        
+        cursor.execute("""
+            INSERT INTO user_feedback 
+            (user_id, session_id, movie_id, action, context_genres, 
+             context_era, context_themes, position_in_session, previous_movie_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            session_id,
+            movie_id,
+            normalized_action,
+            json.dumps(context.get('genres', [])),
+            context.get('era', 'any'),
+            json.dumps(context.get('themes', [])),
+            position_in_session,
+            previous_movie_id
+        ))
+        
+        # Update movie statistics
+        is_positive = normalized_action in ['right', 'up']
+        is_negative = normalized_action in ['left']
+        
+        cursor.execute("""
+            INSERT INTO movie_statistics (movie_id, total_shown, total_liked, total_rejected)
+            VALUES (?, 1, ?, ?)
+            ON CONFLICT(movie_id) DO UPDATE SET
+                total_shown = total_shown + 1,
+                total_liked = total_liked + ?,
+                total_rejected = total_rejected + ?,
+                last_updated = CURRENT_TIMESTAMP
+        """, (
+            movie_id,
+            1 if is_positive else 0,
+            1 if is_negative else 0,
+            1 if is_positive else 0,
+            1 if is_negative else 0
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        # Update user preferences (async or batch - can be optimized)
+        self._update_user_preferences(user_id)
+        
+        # Update compatibility score for this selection-movie combination
+        self.update_compatibility_score(
+            user_id=user_id,
+            movie_id=movie_id,
+            genres=context.get('genres', []),
+            era=context.get('era', 'any'),
+            themes=context.get('themes', []),
+            action=action
+        )
+    
+    def get_user_history(
+        self,
+        user_id: int,
+        session_id: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict]:
+        """Get user's feedback history from database (across ALL sessions)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        if session_id:
+            # Get current session + recent history
+            cursor.execute("""
+                SELECT movie_id, action, timestamp, context_genres, context_era, context_themes
+                FROM user_feedback
+                WHERE user_id = ? AND (session_id = ? OR timestamp > datetime('now', '-7 days'))
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (user_id, session_id, limit))
+        else:
+            # Get all recent history
+            cursor.execute("""
+                SELECT movie_id, action, timestamp, context_genres, context_era, context_themes
+                FROM user_feedback
+                WHERE user_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (user_id, limit))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'movie_id': row[0],
+                'action': row[1],
+                'timestamp': row[2],
+                'context': {
+                    'genres': json.loads(row[3]) if row[3] else [],
+                    'era': row[4],
+                    'themes': json.loads(row[5]) if row[5] else []
+                }
+            })
+        
+        conn.close()
+        return results
+    
+    def get_adjustment(
+        self,
+        movie_id: int,
+        user_id: int,
+        session_id: Optional[str],
+        user_history: List[Dict],
+        content_similarity_model,
+        graph_model
+    ) -> float:
+        """Get feedback adjustment [-0.10, +0.10] from persistent user history"""
+        if not user_history:
+            return 0.0
+        
+        boost = 0.0
+        penalty = 0.0
+        
+        # Get last 20 actions (more than session-only for better learning)
+        recent_feedback = user_history[:20]
+        
+        liked_movies = [
+            {'movie_id': f['movie_id'], 'action': f['action']}
+            for f in recent_feedback
+            if f['action'] in ['right', 'up', 'yes', 'final']
+        ]
+        rejected_movies = [
+            f['movie_id'] for f in recent_feedback
+            if f['action'] in ['left', 'no']
+        ]
+        
+        # Pre-compute graph neighbors for liked/rejected movies (optimization)
+        liked_neighbors_cache = {}
+        rejected_neighbors_cache = {}
+        
+        if graph_model:
+            for entry in liked_movies[-10:]:
+                liked_id = entry['movie_id']
+                if liked_id not in liked_neighbors_cache:
+                    try:
+                        liked_neighbors_cache[liked_id] = dict(
+                            graph_model.get_neighbors(liked_id, top_k=100)
+                        )
+                    except:
+                        liked_neighbors_cache[liked_id] = {}
+            
+            for rejected_id in rejected_movies[-10:]:
+                if rejected_id not in rejected_neighbors_cache:
+                    try:
+                        rejected_neighbors_cache[rejected_id] = dict(
+                            graph_model.get_neighbors(rejected_id, top_k=100)
+                        )
+                    except:
+                        rejected_neighbors_cache[rejected_id] = {}
+        
+        # Calculate similarity to liked movies
+        for entry in liked_movies[-10:]:  # Last 10 liked
+            liked_id = entry['movie_id']
+            action_type = entry['action']
+            
+            # Compute similarity (60% content, 40% graph)
+            sim_content = 0.0
+            if content_similarity_model:
+                try:
+                    sim_content = content_similarity_model.get_similarity(movie_id, liked_id)
+                except:
+                    sim_content = 0.0
+            
+            sim_graph = liked_neighbors_cache.get(liked_id, {}).get(movie_id, 0.0) if graph_model else 0.0
+            sim = 0.6 * sim_content + 0.4 * sim_graph
+            
+            if action_type in ['right', 'yes']:
+                boost = max(boost, 0.08 * sim)
+            elif action_type in ['up', 'final']:
+                boost = max(boost, 0.10 * sim)
+        
+        # Calculate similarity to rejected movies
+        for rejected_id in rejected_movies[-10:]:  # Last 10 rejected
+            sim_content = 0.0
+            if content_similarity_model:
+                try:
+                    sim_content = content_similarity_model.get_similarity(movie_id, rejected_id)
+                except:
+                    sim_content = 0.0
+            
+            sim_graph = rejected_neighbors_cache.get(rejected_id, {}).get(movie_id, 0.0) if graph_model else 0.0
+            sim = 0.6 * sim_content + 0.4 * sim_graph
+            
+            penalty = min(penalty, -0.10 * sim)
+        
+        return np.clip(boost + penalty, -0.10, +0.10)
+    
+    def _create_selection_signature(
+        self, 
+        genres: List[str], 
+        era: str, 
+        themes: List[str]
+    ) -> str:
+        """
+        Create deterministic signature for selection combination.
+        
+        Format: "genre1|genre2|era|theme1|theme2"
+        - Genres sorted alphabetically
+        - Themes sorted alphabetically
+        - Era normalized to lowercase
+        - Pipe-separated for easy parsing
+        
+        Examples:
+        - genres=["action", "thriller"], era="new_era", themes=["espionage"]
+          → "action|thriller|new_era|espionage"
+        
+        - genres=["comedy"], era="any", themes=[]
+          → "comedy|any|"
+        
+        Args:
+            genres: List of genre strings
+            era: Era string ('new_era', 'millennium', etc.)
+            themes: List of theme strings
+            
+        Returns:
+            Signature string (deterministic, sortable)
+        """
+        # Sort and normalize genres
+        sorted_genres = sorted([g.lower().strip() for g in genres if g])
+        genre_str = '|'.join(sorted_genres) if sorted_genres else ''
+        
+        # Normalize era
+        era_str = era.lower().strip() if era else 'any'
+        
+        # Sort and normalize themes
+        sorted_themes = sorted([t.lower().strip() for t in themes if t])
+        theme_str = '|'.join(sorted_themes) if sorted_themes else ''
+        
+        # Combine: genres|era|themes
+        return f"{genre_str}|{era_str}|{theme_str}"
+    
+    def _normalize_action(self, action: str) -> str:
+        """Normalize action types: yes=right, final=up, no=left"""
+        action_map = {
+            'yes': 'right',
+            'final': 'up',
+            'no': 'left'
+        }
+        return action_map.get(action.lower(), action.lower())
+    
+    def _update_user_preferences(self, user_id: int):
+        """Update user preference profile from feedback history"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get all feedback for this user (last 100 actions)
+        cursor.execute("""
+            SELECT movie_id, action, context_genres, context_era, context_themes
+            FROM user_feedback
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """, (user_id,))
+        
+        genre_weights = {}
+        era_weights = {}
+        keyword_weights = {}
+        
+        for row in cursor.fetchall():
+            movie_id, action, genres_json, era, themes_json = row
+            genres = json.loads(genres_json) if genres_json else []
+            themes = json.loads(themes_json) if themes_json else []
+            
+            normalized_action = self._normalize_action(action)
+            
+            # Weight by action type
+            if normalized_action in ['right', 'up']:
+                weight = 0.1 if normalized_action == 'right' else 0.15
+                for genre in genres:
+                    genre_weights[genre] = genre_weights.get(genre, 0.0) + weight
+                if era:
+                    era_weights[era] = era_weights.get(era, 0.0) + weight
+                for theme in themes:
+                    keyword_weights[theme] = keyword_weights.get(theme, 0.0) + weight
+            elif normalized_action in ['left']:
+                weight = -0.1
+                for genre in genres:
+                    genre_weights[genre] = genre_weights.get(genre, 0.0) + weight
+        
+        # Normalize weights
+        max_genre = max(abs(v) for v in genre_weights.values()) if genre_weights else 1.0
+        max_era = max(abs(v) for v in era_weights.values()) if era_weights else 1.0
+        max_keyword = max(abs(v) for v in keyword_weights.values()) if keyword_weights else 1.0
+        
+        genre_weights = {k: v / max_genre for k, v in genre_weights.items()} if max_genre > 0 else {}
+        era_weights = {k: v / max_era for k, v in era_weights.items()} if max_era > 0 else {}
+        keyword_weights = {k: v / max_keyword for k, v in keyword_weights.items()} if max_keyword > 0 else {}
+        
+        # Save to database
+        cursor.execute("""
+            INSERT INTO user_preferences 
+            (user_id, liked_genres, liked_eras, liked_keywords, last_updated)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                liked_genres = ?,
+                liked_eras = ?,
+                liked_keywords = ?,
+                last_updated = CURRENT_TIMESTAMP
+        """, (
+            user_id,
+            json.dumps(genre_weights),
+            json.dumps(era_weights),
+            json.dumps(keyword_weights),
+            json.dumps(genre_weights),
+            json.dumps(era_weights),
+            json.dumps(keyword_weights)
+        ))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_user_preferences(self, user_id: int) -> Dict:
+        """Get user's learned preferences from database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT liked_genres, liked_eras, liked_keywords
+            FROM user_preferences
+            WHERE user_id = ?
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                'genres': json.loads(row[0]) if row[0] else {},
+                'eras': json.loads(row[1]) if row[1] else {},
+                'keywords': json.loads(row[2]) if row[2] else {}
+            }
+        return {'genres': {}, 'eras': {}, 'keywords': {}}
+    
+    def update_compatibility_score(
+        self,
+        user_id: int,
+        movie_id: int,
+        genres: List[str],
+        era: str,
+        themes: List[str],
+        action: str  # 'right', 'up', 'left', 'no', 'yes', 'final'
+    ):
+        """
+        Update compatibility score for movie-selection combination.
+        
+        Update Rules:
+        - YES (right, yes): +0.1 per action
+        - YES (up, final): +0.1 per action (same weight)
+        - NO (left, no): -0.1 per action
+        - Scores accumulate: Multiple YES/NO add up
+        - Clamped to [-1.0, +1.0]
+        - No time decay: All feedback equally weighted
+        
+        Examples:
+        - User says YES once: score = 0.0 + 0.1 = 0.1
+        - User says YES twice: score = 0.1 + 0.1 = 0.2
+        - User says NO once: score = 0.2 - 0.1 = 0.1
+        - User says NO three times: score = 0.1 - 0.3 = -0.2
+        
+        Args:
+            user_id: User ID
+            movie_id: Movie ID
+            genres: List of genres from selection
+            era: Era from selection
+            themes: List of themes from selection
+            action: User action ('yes', 'no', 'right', 'left', 'up', 'final')
+        """
+        selection_sig = self._create_selection_signature(genres, era, themes)
+        normalized_action = self._normalize_action(action)
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get current score
+        cursor.execute("""
+            SELECT compatibility_score, interaction_count
+            FROM selection_movie_compatibility
+            WHERE user_id = ? AND movie_id = ? AND selection_signature = ?
+        """, (user_id, movie_id, selection_sig))
+        
+        row = cursor.fetchone()
+        
+        if row:
+            current_score = row[0]
+            interaction_count = row[1]
+        else:
+            current_score = 0.0
+            interaction_count = 0
+        
+        # Calculate score adjustment
+        if normalized_action in ['right', 'up', 'yes', 'final']:
+            # Positive feedback: +0.1 (all YES actions have same weight)
+            adjustment = 0.1
+            new_score = min(1.0, current_score + adjustment)
+        elif normalized_action in ['left', 'no']:
+            # Negative feedback: -0.1
+            adjustment = -0.1
+            new_score = max(-1.0, current_score + adjustment)
+        else:
+            # Unknown action, no change
+            new_score = current_score
+            adjustment = 0.0
+        
+        # Update or insert
+        cursor.execute("""
+            INSERT INTO selection_movie_compatibility 
+            (user_id, movie_id, selection_signature, compatibility_score, interaction_count, last_interaction)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, movie_id, selection_signature) DO UPDATE SET
+                compatibility_score = ?,
+                interaction_count = interaction_count + 1,
+                last_interaction = CURRENT_TIMESTAMP
+        """, (
+            user_id, movie_id, selection_sig, new_score, interaction_count + 1,
+            new_score
+        ))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_compatibility_score(
+        self,
+        user_id: int,
+        movie_id: int,
+        genres: List[str],
+        era: str,
+        themes: List[str]
+    ) -> float:
+        """
+        Get compatibility score for movie-selection combination.
+        
+        Returns:
+            Compatibility score in [-1.0, +1.0]
+            - Positive: Movie fits well with this selection (user liked it)
+            - Negative: Movie doesn't fit well (user rejected it)
+            - 0.0: No data (neutral, no learning yet)
+        
+        Examples:
+        - Score = +0.3: User liked this movie 3 times for this selection
+        - Score = -0.2: User rejected this movie 2 times for this selection
+        - Score = 0.0: No feedback yet for this movie-selection combination
+        """
+        selection_sig = self._create_selection_signature(genres, era, themes)
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT compatibility_score
+            FROM selection_movie_compatibility
+            WHERE user_id = ? AND movie_id = ? AND selection_signature = ?
+        """, (user_id, movie_id, selection_sig))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return float(row[0])
+        return 0.0  # No data, neutral score
 
 
 class SmartRecommendationEngine:
@@ -53,7 +630,9 @@ class SmartRecommendationEngine:
     def __init__(
         self,
         base_engine: RecommendationEngine,
-        keyword_analyzer: Optional[KeywordAnalyzer] = None
+        keyword_analyzer: Optional[KeywordAnalyzer] = None,
+        content_similarity: Optional[Any] = None,
+        feedback_db_path: Optional[Path] = None
     ):
         """
         Initialize smart recommendation engine.
@@ -61,10 +640,19 @@ class SmartRecommendationEngine:
         Args:
             base_engine: Base engine with CF and graph models
             keyword_analyzer: Optional keyword analyzer for suggestions
+            content_similarity: Optional ContentSimilarity model
+            feedback_db_path: Optional path to feedback database
         """
         self.base_engine = base_engine
         self.movies = base_engine.movies
         self.keyword_analyzer = keyword_analyzer
+        self.content_similarity = content_similarity
+        
+        # Initialize persistent feedback learner
+        if feedback_db_path:
+            self.feedback_learner = PersistentFeedbackLearner(feedback_db_path)
+        else:
+            self.feedback_learner = None
 
         # Base scoring weights (when NO keywords selected)
         self.w_genre_base = 0.30
@@ -104,10 +692,11 @@ class SmartRecommendationEngine:
         source_material: Optional[str] = None,
         themes: Optional[List[str]] = None,
         session_history: Optional[List[Dict]] = None,
+        session_id: Optional[str] = None,
         top_k: int = 20
     ) -> List[int]:
         """
-        Generate recommendations with new filtering system.
+        Generate recommendations with new filtering system and cross-session learning.
 
         Args:
             user_id: User ID
@@ -115,7 +704,8 @@ class SmartRecommendationEngine:
             era: Selected time period ('new_era', 'millennium', 'old_school', 'golden_era', 'any')
             source_material: Source material preference ('book', 'true_story', 'any', etc.)
             themes: List of thematic keywords selected by user
-            session_history: List of {movie_id, action, num_votes, pacing_score} dicts
+            session_history: List of {movie_id, action, num_votes, pacing_score} dicts (current session)
+            session_id: Optional session ID for cross-session learning
             top_k: Number of recommendations to return
 
         Returns:
@@ -130,10 +720,36 @@ class SmartRecommendationEngine:
         if source_material is None:
             source_material = 'any'
 
+        # Load user history from database (across all sessions)
+        if self.feedback_learner and user_id:
+            try:
+                db_history = self.feedback_learner.get_user_history(
+                    user_id=user_id,
+                    session_id=session_id,
+                    limit=50  # Last 50 actions across all sessions
+                )
+                # Merge with current session history (current session takes precedence)
+                # Convert db_history format to match session_history format
+                for db_item in db_history:
+                    # Check if not already in session_history (avoid duplicates)
+                    if not any(
+                        sh.get('movie_id') == db_item['movie_id'] and 
+                        sh.get('action') == db_item['action']
+                        for sh in session_history
+                    ):
+                        session_history.append({
+                            'movie_id': db_item['movie_id'],
+                            'action': db_item['action'],
+                            'context': db_item.get('context', {})
+                        })
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to load user history from database: {e}")
+
         # Extract session context
         session_positive = [
             item['movie_id'] for item in session_history
-            if item.get('action') in ['right', 'up']
+            if item.get('action') in ['right', 'up', 'yes', 'final']
         ]
         already_shown = [item['movie_id'] for item in session_history]
 
@@ -165,6 +781,43 @@ class SmartRecommendationEngine:
         # STAGE 3: Sort and return top K
         top_indices = np.argsort(scores)[-top_k:][::-1]
         return candidates.iloc[top_indices]['movie_id'].tolist()
+
+    def update_feedback(
+        self,
+        user_id: int,
+        session_id: str,
+        movie_id: int,
+        action: str,
+        context: Dict,
+        position_in_session: int = 0,
+        previous_movie_id: Optional[int] = None
+    ):
+        """
+        Update feedback learner and persist to database (remembers across sessions).
+        
+        Args:
+            user_id: User ID
+            session_id: Session ID
+            movie_id: Movie ID
+            action: Action type ('yes', 'no', 'final', 'left', 'right', 'up')
+            context: Context dict with 'genres', 'era', 'themes'
+            position_in_session: Position in current session
+            previous_movie_id: Previous movie ID shown
+        """
+        if self.feedback_learner:
+            try:
+                self.feedback_learner.log_feedback(
+                    user_id=user_id,
+                    session_id=session_id,
+                    movie_id=movie_id,
+                    action=action,
+                    context=context,
+                    position_in_session=position_in_session,
+                    previous_movie_id=previous_movie_id
+                )
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to persist feedback: {e}")
 
     def get_strict_scores(self) -> Dict[int, float]:
         """
@@ -767,6 +1420,119 @@ class SmartRecommendationEngine:
 
         return self.keyword_analyzer.suggest_keywords(genres, num_keywords)
 
+    def _get_cf_score_single(self, user_id: int, movie_id: int) -> float:
+        """
+        Get Collaborative Filtering score for a single movie.
+        
+        Args:
+            user_id: User ID
+            movie_id: Movie ID
+            
+        Returns:
+            CF score normalized to [0, 1]
+        """
+        try:
+            if not hasattr(self.base_engine, 'cf_model') or self.base_engine.cf_model is None:
+                return 0.5  # Neutral score if CF model unavailable
+            
+            # Predict using CF model (returns score in [-1, 1])
+            cf_score = self.base_engine.cf_model.predict(user_id, movie_id)
+            
+            # Normalize from [-1, 1] to [0, 1]
+            normalized_score = (cf_score + 1) / 2.0
+            return max(0.0, min(1.0, normalized_score))
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"CF prediction failed for user {user_id}, movie {movie_id}: {e}")
+            return 0.5
+    
+    def _get_graph_score_single(self, movie_id: int, session_positive_movies: List[int]) -> float:
+        """
+        Get Graph co-occurrence score for a single movie.
+        
+        Args:
+            movie_id: Movie ID
+            session_positive_movies: List of movie IDs user liked in session
+            
+        Returns:
+            Graph score in [0, 1]
+        """
+        if not session_positive_movies:
+            return 0.0
+        
+        try:
+            if not hasattr(self.base_engine, 'graph') or self.base_engine.graph is None:
+                return 0.0
+            
+            # Get max similarity from last 5 positive movies
+            max_similarity = 0.0
+            for liked_id in session_positive_movies[-5:]:
+                try:
+                    neighbors = dict(self.base_engine.graph.get_neighbors(liked_id, top_k=100))
+                    similarity = neighbors.get(movie_id, 0.0)
+                    max_similarity = max(max_similarity, similarity)
+                except:
+                    continue
+            
+            return min(1.0, max_similarity)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Graph score failed for movie {movie_id}: {e}")
+            return 0.0
+    
+    def _get_content_score_single(
+        self,
+        movie_id: int,
+        session_positive_movies: List[int],
+        session_negative_movies: List[int]
+    ) -> float:
+        """
+        Get Content Similarity score for a single movie.
+        
+        Args:
+            movie_id: Movie ID
+            session_positive_movies: List of movie IDs user liked
+            session_negative_movies: List of movie IDs user rejected
+            
+        Returns:
+            Content score in [0, 1]
+        """
+        if self.content_similarity is None:
+            return 0.0
+        
+        if not session_positive_movies and not session_negative_movies:
+            return 0.0
+        
+        try:
+            positive_signal = 0.0
+            if session_positive_movies:
+                # Get max similarity to positive movies
+                for liked_id in session_positive_movies[-5:]:
+                    try:
+                        sim = self.content_similarity.get_similarity(movie_id, liked_id)
+                        positive_signal = max(positive_signal, sim)
+                    except:
+                        continue
+            
+            negative_signal = 0.0
+            if session_negative_movies:
+                # Get max similarity to negative movies (penalty)
+                for rejected_id in session_negative_movies[-5:]:
+                    try:
+                        sim = self.content_similarity.get_similarity(movie_id, rejected_id)
+                        negative_signal = max(negative_signal, sim)
+                    except:
+                        continue
+            
+            # Combine: positive signal - (negative signal * 0.5)
+            # Negative penalty is weaker to avoid over-penalization
+            content_score = positive_signal - (negative_signal * 0.5)
+            return max(0.0, min(1.0, content_score))
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Content similarity failed for movie {movie_id}: {e}")
+            return 0.0
+
     def _score_candidates_new(
         self,
         candidates: pd.DataFrame,
@@ -779,34 +1545,52 @@ class SmartRecommendationEngine:
         session_history: List[Dict]
     ) -> np.ndarray:
         """
-        Score candidates with new filtering system.
-
-        Components:
-        - Genre matching (30%)
-        - Era matching (20%)
-        - Source material matching (15%)
-        - Theme keywords matching (25%)
-        - Quality score (10%)
+        Score candidates with hybrid ML system.
+        
+        IMPORTANT: candidates DataFrame already passed hard filters.
+        Feedback adjustments only affect ranking within this pool.
+        
+        Scoring Formula:
+        - Explicit Components (70%):
+          + Genre Match × 0.30
+          + Era Match × 0.15
+          + Keyword Match × 0.20
+          + Quality × 0.05
+        - ML Components (25%):
+          + CF Score × 0.15
+          + Graph Score × 0.10
+        - Content Similarity (5%):
+          + Content Score × 0.05 (if available, else 0.0)
+        - Feedback Adjustment (±10%):
+          + Context-Specific Feedback ±10%
+        - Selection-Movie Compatibility (±5%):
+          + Compatibility Score × 0.05 (context-specific learning)
+        
+        Final Score = Base Score + Feedback Adjustment + Compatibility Adjustment
         """
         num_candidates = len(candidates)
         scores = np.zeros(num_candidates)
-
+        
+        # Extract negative movies from session history
+        session_negative = [
+            item['movie_id'] for item in session_history
+            if item.get('action') in ['left', 'no']
+        ]
+        
         for idx, (_, row) in enumerate(candidates.iterrows()):
-            score_components = []
-
-            # 1. Genre matching (40%, increased from 30%)
+            movie_id = row['movie_id']
+            
+            # EXPLICIT COMPONENTS (70%)
+            # 1. Genre matching (30%)
             movie_genres = set(row['genres']) if isinstance(row['genres'], (list, np.ndarray)) else set()
             genre_set = set(genres)
             genre_overlap = len(movie_genres & genre_set) / len(genre_set) if genre_set else 0
-            score_components.append(genre_overlap * 0.40)
-
-            # 2. Era matching (20%, unchanged)
-            era_score = TimePeriodFilter.calculate_era_score(row['year'], era)
-            score_components.append(era_score * 0.20)
-
-            # 3. Source material REMOVED (was 15%, redistributed to genre +10%, keywords +5%)
-
-            # 4. Theme keywords matching (30%, increased from 25%)
+            genre_score = genre_overlap * 0.30
+            
+            # 2. Era matching (15%)
+            era_score = TimePeriodFilter.calculate_era_score(row['year'], era) * 0.15
+            
+            # 3. Theme keywords matching (20%)
             movie_keywords = row.get('keywords', [])
             if themes:
                 theme_matches = 0
@@ -815,18 +1599,69 @@ class SmartRecommendationEngine:
                     for theme in themes:
                         if theme.lower() in movie_kw_lower:
                             theme_matches += 1
-
-                theme_score = theme_matches / len(themes) if themes else 0
-                score_components.append(theme_score * 0.30)
+                theme_score = (theme_matches / len(themes)) * 0.20 if themes else 0
             else:
-                score_components.append(0.30)  # Full score if no themes specified
-
-            # 5. Quality score (10%, unchanged for now)
-            quality = self._calculate_simple_quality(row)
-            score_components.append(quality * 0.10)
-
-            scores[idx] = sum(score_components)
-
+                theme_score = 0.20  # Full score if no themes specified
+            
+            # 4. Quality score (5%)
+            quality_score = self._calculate_simple_quality(row) * 0.05
+            
+            explicit_score = genre_score + era_score + theme_score + quality_score
+            
+            # ML COMPONENTS (25%)
+            cf_score = self._get_cf_score_single(user_id, movie_id) * 0.15
+            graph_score = self._get_graph_score_single(movie_id, session_positive_movies) * 0.10
+            ml_score = cf_score + graph_score
+            
+            # CONTENT SIMILARITY (5%)
+            content_score = self._get_content_score_single(
+                movie_id, session_positive_movies, session_negative
+            ) * 0.05
+            
+            # BASE SCORE (100%)
+            base_score = explicit_score + ml_score + content_score
+            
+            # FEEDBACK ADJUSTMENT (±10%)
+            # Get feedback adjustment from persistent learner (uses cross-session history)
+            feedback_adjustment = 0.0
+            if self.feedback_learner:
+                try:
+                    graph_model = getattr(self.base_engine, 'graph', None)
+                    feedback_adjustment = self.feedback_learner.get_adjustment(
+                        movie_id=movie_id,
+                        user_id=user_id,
+                        session_id=None,  # Will load from session_history if needed
+                        user_history=session_history,  # Includes cross-session history
+                        content_similarity_model=self.content_similarity,
+                        graph_model=graph_model
+                    )
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Feedback adjustment failed for movie {movie_id}: {e}")
+                    feedback_adjustment = 0.0
+            
+            # SELECTION-MOVIE COMPATIBILITY (±5%)
+            compatibility_adjustment = 0.0
+            if self.feedback_learner:
+                try:
+                    compatibility_score = self.feedback_learner.get_compatibility_score(
+                        user_id=user_id,
+                        movie_id=movie_id,
+                        genres=genres,
+                        era=era,
+                        themes=themes
+                    )
+                    # Map [-1.0, +1.0] to [-0.05, +0.05] (5% weight)
+                    compatibility_adjustment = compatibility_score * 0.05
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Compatibility score failed for movie {movie_id}: {e}")
+                    compatibility_adjustment = 0.0
+            
+            # FINAL SCORE
+            scores[idx] = base_score + feedback_adjustment + compatibility_adjustment
+            scores[idx] = np.clip(scores[idx], 0.0, 1.0)  # Clamp to [0, 1]
+        
         return scores
 
     def _calculate_simple_quality(self, movie_row: pd.Series) -> float:
@@ -847,7 +1682,8 @@ class SmartRecommendationEngine:
 def load_smart_system(
     models_dir: Path,
     movies_path: Path,
-    keyword_db_path: Optional[Path] = None
+    keyword_db_path: Optional[Path] = None,
+    feedback_db_path: Optional[Path] = None
 ) -> SmartRecommendationEngine:
     """
     Load complete smart recommendation system.
@@ -856,11 +1692,13 @@ def load_smart_system(
         models_dir: Directory with CF and graph models
         movies_path: Path to movies.parquet
         keyword_db_path: Optional path to keyword_database.pkl
+        feedback_db_path: Optional path to feedback database (default: output/feedback.db)
 
     Returns:
         SmartRecommendationEngine instance
     """
     from recommendation.recommendation_engine import load_system as load_base
+    from models.content_similarity import ContentSimilarity
 
     # Load base engine (CF + graph)
     base_engine = load_base(models_dir, movies_path)
@@ -870,10 +1708,30 @@ def load_smart_system(
     if keyword_db_path and keyword_db_path.exists():
         keyword_analyzer = KeywordAnalyzer.load(keyword_db_path)
 
+    # Load Content Similarity model if available (optional)
+    content_similarity = None
+    content_sim_path = models_dir / 'content_similarity.pkl'
+    logger = logging.getLogger(__name__)
+    if content_sim_path.exists():
+        try:
+            content_similarity = ContentSimilarity.load(models_dir)
+            logger.info("Content Similarity model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Could not load ContentSimilarity model: {e}")
+    else:
+        logger.info("Content Similarity model not found (optional) - continuing without it")
+
+    # Set default feedback database path if not provided
+    if feedback_db_path is None:
+        # Default to output/feedback.db relative to models_dir
+        feedback_db_path = models_dir.parent / 'feedback.db'
+
     # Create smart engine
     smart_engine = SmartRecommendationEngine(
         base_engine=base_engine,
-        keyword_analyzer=keyword_analyzer
+        keyword_analyzer=keyword_analyzer,
+        content_similarity=content_similarity,
+        feedback_db_path=feedback_db_path
     )
 
     return smart_engine

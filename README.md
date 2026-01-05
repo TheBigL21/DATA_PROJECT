@@ -1,515 +1,441 @@
-# Movie Recommendation System - Complete Setup Guide
+# Movie Finder: Machine Learning Recommendation System
 
 **Advanced Programming 2025 - HEC Lausanne / UNIL**
 
-A full-stack movie recommendation system with hybrid machine learning backend and React frontend.
 
-Built with assistance from Claude Code - AI-powered coding assistant
+## Introduction
+
+Movie Finder is a hybrid recommendation system that combines collaborative filtering, graph-based methods, and content similarity to provide personalized movie recommendations. The system learns from user feedback and adapts recommendations across sessions using persistent learning.
+
+What makes it interesting is that it doesn't just use your preferences once and forget them. It remembers what you liked in different contexts - like what works for date night versus what you prefer for a chill evening - and uses that information to improve recommendations over time.
+
+**Key Features:**
+- Hybrid ML approach: Collaborative Filtering (15%), Co-occurrence Graph (10%), Content Similarity (5%)
+- Persistent feedback learning with context-specific adaptation
+- Hard filters ensure quality: minimum 6.0 rating, 5,000+ votes
+- Dataset: 45,207 quality movies from IMDb enriched with TMDb metadata
+- API response time: under 200ms
+- Modern React frontend with swipe-based interaction
 
 ---
 
-## System Overview
+## Quick Start
 
-This project consists of **two separate components**:
+**Prerequisites:** Python 3.9+, Node.js, TMDb API key
 
-1. **DATA_PROJECT/** - Backend (Python API + ML models)
-2. **DATA_WEBSITE/** - Frontend (React/TypeScript web interface)
-
-Both work together
-
----
-
-## Quick Start (Full System)
-
-### Method 1: Use Both Backend + Frontend (Recommended)
-
+**Backend:**
 ```bash
-# Terminal 1: Start Backend
 cd DATA_PROJECT
 pip install -r requirements.txt
 python main.py
-# API running on http://localhost:5000
+```
 
-# Terminal 2: Start Frontend
+**Frontend:**
+```bash
 cd DATA_WEBSITE
 npm install
 npm run dev
-# Web app running on http://localhost:5173
-
-# Open browser: http://localhost:5173
 ```
 
-### Method 2: Backend Only (CLI Testing)
+Access at `http://localhost:5173`
 
-```bash
-cd DATA_PROJECT
-python main.py --cli              # Simple questionnaire
-python main.py --interactive      # Swipe interface
+**First-time setup:** Run `python main.py --pipeline` to train models (2-4 hours)
+
+---
+
+## System Architecture
+
+The Movie Finder system uses a hybrid recommendation architecture that combines explicit user preferences, machine learning models, and adaptive learning from user feedback. Here's how it works:
+
+```mermaid
+graph TB
+    User[User Selection<br/>Genres + Era + Themes] --> Filter[Hard Filters<br/>Quality Floor: 6.0<br/>Votes: 5,000+]
+    Filter --> CandidatePool[Candidate Pool<br/>50-200 Movies]
+    
+    CandidatePool --> Scoring[Hybrid Scoring Engine]
+    
+    Scoring --> Explicit[Explicit Components<br/>70% Weight<br/>Genre + Era + Keywords + Quality]
+    Scoring --> ML[ML Components<br/>25% Weight<br/>Collaborative Filtering + Graph]
+    Scoring --> Content[Content Similarity<br/>5% Weight<br/>TF-IDF Cosine]
+    Scoring --> FeedbackAdj[Feedback Adjustment<br/>±10% Range<br/>Learn from Likes/Dislikes]
+    Scoring --> CompatAdj[Compatibility Score<br/>±5% Range<br/>Context-Specific Learning]
+    
+    Explicit --> FinalScore[Final Score<br/>Weighted Sum]
+    ML --> FinalScore
+    Content --> FinalScore
+    FeedbackAdj --> FinalScore
+    CompatAdj --> FinalScore
+    
+    FinalScore --> Rank[Rank & Return<br/>Top 10-20 Movies]
+    Rank --> API[Flask API]
+    API --> Frontend[React Frontend]
+    
+    UserFeedback[User Feedback<br/>YES/NO/FINAL] --> CreateSig[Create Selection Signature<br/>Hash: genres+era+themes]
+    CreateSig --> UpdateCompat[Update Compatibility Score<br/>YES: +0.1, NO: -0.1]
+    UpdateCompat --> StoreDB[(Feedback Database<br/>SQLite)]
+    StoreDB --> LoadMatch[Load for Matching Selections<br/>Cross-Session Learning]
+    LoadMatch --> CompatAdj
+    
+    style Explicit fill:#e1f5ff
+    style ML fill:#fff4e1
+    style Content fill:#ffe1f5
+    style FeedbackAdj fill:#e1ffe1
+    style CompatAdj fill:#e1ffe1
+    style StoreDB fill:#fffacd
 ```
 
-No frontend needed - full recommendations in terminal.
+### Architecture Overview
+
+The system follows a multi-stage pipeline:
+
+1. **Candidate Generation** - Filters 45K+ movies down to 50-200 high-quality candidates
+2. **Hybrid Scoring** - Combines 5 different scoring components
+3. **Adaptive Learning** - Learns from every swipe and remembers across sessions
+4. **Real-time Ranking** - Delivers personalized results in under 200ms
+
+**Scoring Components:**
+- Explicit (70%) - User's direct preferences (genre, era, themes)
+- ML (25%) - Learns patterns from 1,000+ synthetic user interactions
+- Content (5%) - Finds semantic similarity using TF-IDF vectorization
+- Feedback (±10%) - Adapts based on what you've liked/disliked
+- Compatibility (±5%) - Remembers context-specific preferences (e.g., "Action movies for date night")
+
+---
+
+## How It Works
+
+Movie Finder uses a three-stage pipeline to transform your preferences into recommendations. The system learns from your feedback and gets better over time.
+
+### User Flow
+
+![Landing Page - Evening Type Selection](images/landing_page.png)
+*Step 1: User selects evening type (Date Night, Family, Friends, Chill Evening)*
+
+![Genre Selection Interface](images/genre_selection.png)
+*Step 2: User selects 1-2 genres*
+
+![Era Selection Interface](images/era_selection.png)
+*Step 3: User selects era (optional)*
+
+![Theme/Keyword Selection](images/keyword_selection.png)
+*Step 4: User adds themes/keywords (optional)*
+
+![Movie Recommendation Card](images/movie_card.png)
+*Step 5: System displays movie cards one at a time*
+
+![Swipe Interface Demonstration](images/swipe_actions.png)
+*Step 6: User swipes (YES/NO/FINAL) - system learns and adapts*
+
+### Recommendation Process
+
+**Stage 1: Candidate Generation**
+
+The system starts with 45,207 movies from IMDb and applies quality filters:
+- Genre matching - Only movies in your selected genres
+- Quality floor - Minimum 6.0 rating
+- Popularity threshold - At least 5,000 votes
+- Era filtering - Respects your time period preferences
+
+This results in a pool of 50-200 high-quality candidates ready for scoring.
+
+**Stage 2: Hybrid Scoring**
+
+Each candidate movie gets scored using multiple components:
+
+**Explicit Components (70% weight):**
+- Genre match: 30% - Does it match your selected genres?
+- Era match: 15% - Is it from your preferred time period?
+- Theme keywords: 20% - Does it contain your thematic keywords?
+- Quality score: 5% - How highly rated is it?
+
+**ML Components (25% weight):**
+- Collaborative Filtering (15%) - Uses patterns from similar users
+- Co-occurrence Graph (10%) - Uses movies that are watched together
+
+**Content Similarity (5% weight):**
+- TF-IDF cosine similarity - Finds movies with similar themes/descriptions
+
+**Adaptive Adjustments:**
+- Feedback Adjustment (±10%) - Boosts movies similar to ones you liked, penalizes ones like those you rejected
+- Compatibility Score (±5%) - Remembers context-specific preferences (e.g., "You love action movies for date night")
+
+**Stage 3: Ranking & Delivery**
+
+All scores are combined into a final weighted score, movies are ranked, and the top 10-20 are returned. This happens in under 200ms.
+
+### The Learning Loop
+
+The system learns from every interaction:
+
+Every time you swipe:
+1. Your feedback is recorded with full context (genres, era, themes)
+2. A selection signature is created - a unique hash of your preferences
+3. Compatibility scores update - YES adds +0.1, NO subtracts -0.1
+4. Everything is stored in the feedback database for cross-session learning
+5. Next recommendations adapt - The system remembers what worked for similar contexts
+
+The more you use it, the better it gets. First session gives good recommendations based on your explicit preferences. Second session is better because it remembers your past preferences. By the tenth session, the system has learned a lot about your taste.
+
+---
+
+## Scoring Mathematics
+
+### Hybrid Scoring Formula
+
+```
+Base Score = Explicit Components (70%)
+           + ML Components (25%)
+           + Content Similarity (5%)
+
+Final Score = Base Score
+            + Feedback Adjustment (±10%)
+            + Compatibility Adjustment (±5%)
+```
+
+### Component Breakdown
+
+**Explicit Components (70%):**
+- Genre Match: 30%
+- Era Match: 15%
+- Theme Keywords: 20%
+- Quality Score: 5%
+
+**ML Components (25%):**
+- Collaborative Filtering: 15%
+- Co-occurrence Graph: 10%
+
+**Content Similarity (5%):**
+- TF-IDF cosine similarity: 5%
+
+**Adjustments:**
+- Feedback Adjustment: ±10% (based on similarity to liked/rejected movies)
+- Compatibility Adjustment: ±5% (context-specific learning)
+
+### Example Calculation
+
+```
+Movie: "The Bourne Identity"
+┌─────────────────────────────────────────┐
+│ Component              │ Score │ Weight │
+├────────────────────────┼───────┼────────┤
+│ Genre Match            │ 0.30  │  30%   │
+│ Era Match              │ 0.15  │  15%   │
+│ Theme Keywords         │ 0.20  │  20%   │
+│ Quality Score          │ 0.05  │   5%   │
+│ CF Score               │ 0.12  │  15%   │
+│ Graph Score            │ 0.08  │  10%   │
+│ Content Score          │ 0.04  │   5%   │
+│ Feedback Adjustment    │+0.05  │ ±10%   │
+│ Compatibility Adj.     │+0.03  │  ±5%   │
+├────────────────────────┼───────┼────────┤
+│ TOTAL SCORE            │ 1.02  │ 100%   │
+│ (clamped to [0, 1])    │ 1.00  │        │
+└─────────────────────────────────────────┘
+```
+
+### Mathematical Foundations
+
+**Collaborative Filtering (ImplicitALS):**
+- Matrix factorization: R ≈ U × M^T
+- Loss function: ||W × (R - U × M^T)||² + λ(||U||² + ||M||²)
+- 50 latent dimensions, trained on 1,000 synthetic users
+- Weight: 15%
+
+**Co-occurrence Graph:**
+- Edge weight: Σ(signal_i × signal_j) for all sessions
+- Signal strength: up-up = 1.0, up-right = 0.3, right-right = 0.09
+- Sparse adjacency matrix: 45K × 45K
+- Weight: 10%
+
+**Content Similarity (TF-IDF):**
+- TF-IDF(t, d) = TF(t, d) × IDF(t)
+- IDF(t) = log(total_documents / documents_containing_term)
+- Similarity = cosine_similarity(vector1, vector2)
+- Weight: 5%
+
+---
+
+## Learning System
+
+Unlike static recommendation systems, Movie Finder learns and adapts from every interaction. The system gets better over time as it learns your preferences.
+
+### Persistent Feedback Learning
+
+The system stores all user interactions in SQLite (`output/feedback.db`):
+
+- **user_feedback**: Individual feedback events with context
+- **user_preferences**: Aggregated preference profiles
+- **movie_statistics**: Movie performance metrics
+- **selection_movie_compatibility**: Context-specific compatibility scores
+
+### Selection-to-Movie Compatibility
+
+This is what makes Movie Finder remember your preferences across sessions:
+
+**How it works:**
+1. User selects: genres + era + themes → creates selection signature (hash)
+2. User says YES → compatibility_score += 0.1
+3. User says NO → compatibility_score -= 0.1
+4. Scores accumulate, clamped to [-1.0, +1.0]
+5. Applied only for matching selection context
+
+If you love action movies for "date night" but prefer comedies for "chill evening," the system remembers both. It tracks what works for each specific context.
+
+**Mathematical details:**
+- Score update: `new_score = current_score ± 0.1`
+- Weight in final score: `compatibility_score × 0.05` (±5%)
+- No time decay: all feedback equally weighted
+
+### Feedback Adjustment
+
+The system learns patterns from your feedback:
+
+**Positive boost:**
+- `max(similarity to liked movies) × 0.10`
+- Range: [0, +0.10]
+- Movies similar to ones you liked get a boost
+
+**Negative penalty:**
+- `max(similarity to rejected movies) × 0.10`
+- Range: [-0.10, 0]
+- Movies similar to ones you rejected get penalized
+
+### Learning Flow
+
+```mermaid
+graph LR
+    A[User Swipe] --> B[Record Feedback]
+    B --> C[Store in DB]
+    C --> D[Update Scores]
+    D --> E[Next Recommendation]
+    E -->|Load History| F[Apply Adjustments]
+    F --> A
+```
 
 ---
 
 ## Installation
 
-### Backend Setup (DATA_PROJECT/)
+### Backend Setup
 
-**1. Install Python Dependencies**
+1. Install dependencies:
 ```bash
-cd DATA_PROJECT
 pip install -r requirements.txt
 ```
 
-Or with conda:
-```bash
-conda env create -f environment.yml
-conda activate movie-recommendation
-```
-
-**2. Configure TMDb API Key**
-
-- Sign up at https://www.themoviedb.org/ (free)
-- Create `DATA_PROJECT/config/tmdb_config.json`:
+2. Configure TMDb API key:
+Create `config/tmdb_config.json`:
 ```json
 {
   "api_key": "your_api_key_here"
 }
 ```
 
-**3. Verify Installation**
+3. Train models (first time only):
 ```bash
-python main.py --cli
-# Should show questionnaire interface
+python main.py --pipeline
 ```
 
-### Frontend Setup (DATA_WEBSITE/)
+### Frontend Setup
 
-**1. Install Node Dependencies**
+1. Install dependencies:
 ```bash
-cd DATA_WEBSITE
 npm install
 ```
 
-**2. Configure Backend URL (Optional)**
-
-Create `DATA_WEBSITE/.env`:
-```
-VITE_API_URL=http://localhost:5000
-```
-
-Default is already `http://localhost:5000`, so this is optional.
-
-**3. Verify Installation**
+2. Start development server:
 ```bash
 npm run dev
-# Should open on http://localhost:5173
 ```
 
 ---
 
-## How They Work Together
+## Usage
 
-### Architecture Diagram
+### Web Interface
 
-```
-User's Browser (http://localhost:5173)
-  |
-  |  DATA_WEBSITE (React Frontend)
-  |  - Questionnaire UI
-  |  - Movie cards with swipe
-  |  - Results display
-  |
-  |  HTTP Requests (Fetch API)
-  |  POST /api/recommend
-  |  GET /api/questionnaire/options
-  |
-  v
-Backend Server (http://localhost:5000)
-  |
-  |  DATA_PROJECT (Python API)
-  |  |
-  |  |  Flask API (api_smart.py)
-  |  |  - Receives user preferences
-  |  |  - Calls recommendation engine
-  |  |
-  |  |  Recommendation Engine (smart_engine.py)
-  |  |  - Loads ML models
-  |  |  - Combines CF + Graph + Content
-  |  |  - Generates top 10 movies
-  |  |
-  |  |  ML Models & Data
-  |  |  - user_factors.npy (CF embeddings)
-  |  |  - movie_factors.npy
-  |  |  - movies.parquet (45K movies)
-```
+1. Start backend: `python main.py`
+2. Start frontend: `npm run dev`
+3. Open `http://localhost:5173`
+4. Complete questionnaire
+5. Swipe through recommendations
 
-### Communication Flow
+### CLI Tools
 
-1. User fills questionnaire in browser (DATA_WEBSITE)
-2. Frontend sends POST request to `http://localhost:5000/api/recommend`
-3. Backend receives request (DATA_PROJECT/api_smart.py)
-4. Recommendation engine processes using ML models
-5. Backend returns JSON with 10 movies
-6. Frontend displays movie cards with swipe interface
-7. User swipes (left/right/up)
-8. Frontend sends feedback to `/api/feedback`
-9. Loop continues until user finds perfect movie
-
----
-
-## Usage Scenarios
-
-### Scenario 1: Full Web Experience
-
-Best for: Showing the complete system with nice UI
-
+**Simple questionnaire:**
 ```bash
-# Terminal 1: Backend
-cd DATA_PROJECT
-python main.py
-# Keep running...
-
-# Terminal 2: Frontend
-cd DATA_WEBSITE
-npm run dev
-# Open http://localhost:5173 in browser
-
-# Use the web interface:
-# 1. Select evening type (date night, family, etc.)
-# 2. Choose 1-2 genres
-# 3. Optional: Select keywords
-# 4. Optional: Choose era
-# 5. Swipe through movies
-# 6. Get perfect recommendation
-```
-
-### Scenario 2: Backend Only (CLI Demo)
-
-Best for: Testing without frontend setup, quick demos
-
-```bash
-cd DATA_PROJECT
-
-# Simple questionnaire
 python main.py --cli
+```
 
-# Interactive swipe interface
+**Interactive swipe:**
+```bash
 python main.py --interactive
 ```
 
-### Scenario 3: API Testing (curl)
+---
 
-Best for: Testing backend independently, debugging
+## API Endpoints
 
-```bash
-# Terminal 1: Start backend
-cd DATA_PROJECT
-python main.py
-
-# Terminal 2: Test API
-curl -X POST http://localhost:5000/api/recommend \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": 1,
-    "evening_type": "date_night",
-    "genres": ["action", "thriller"],
-    "era": "modern",
-    "keywords": ["espionage"],
-    "top_k": 10
-  }'
-```
+- `GET /health` - System status
+- `GET /api/questionnaire/options` - Available options
+- `POST /api/questionnaire/keywords` - Keyword suggestions
+- `POST /api/recommend` - Get recommendations
+- `POST /api/feedback` - Record feedback
+- `GET /api/movie/<id>` - Movie details
 
 ---
 
 ## Project Structure
 
-### DATA_PROJECT/ (Backend)
-
 ```
 DATA_PROJECT/
-├── main.py                  # Entry point - START HERE
-├── api_smart.py             # Flask REST API
-├── movie_finder.py          # Simple CLI
-├── interactive_movie_finder.py  # Advanced CLI
-├── run_pipeline.py          # Data pipeline
-│
+├── api_smart.py              # Flask API
+├── smart_engine.py           # Recommendation engine
 ├── src/
-│   ├── models/              # ML models
-│   │   ├── collaborative_filtering.py  # ALS algorithm
-│   │   ├── cooccurrence_graph.py       # Graph-based CF
-│   │   └── content_similarity.py       # TF-IDF similarity
-│   ├── recommendation/
-│   │   ├── smart_engine.py             # Main recommendation logic
-│   │   └── keyword_analyzer.py         # Keyword matching
-│   └── data_processing/
-│       ├── fetch_tmdb_data.py          # TMDb API integration
-│       └── transform_imdb_data.py      # Data transformation
-│
+│   ├── models/
+│   │   ├── collaborative_filtering.py
+│   │   ├── cooccurrence_graph.py
+│   │   └── content_similarity.py
+│   └── recommendation/
+│       └── smart_engine.py
 ├── output/
-│   ├── processed/
-│   │   └── movies.parquet              # 45,207 movies
-│   └── models/
-│       ├── user_factors.npy            # CF user embeddings
-│       ├── movie_factors.npy           # CF movie embeddings
-│       └── graph_metadata.json         # Co-occurrence graph
-│
+│   ├── processed/movies.parquet
+│   ├── models/
+│   └── feedback.db
 └── config/
-    └── tmdb_config.json                # YOU CREATE THIS
+    └── tmdb_config.json
 ```
-
-### DATA_WEBSITE/ (Frontend)
-
-```
-DATA_WEBSITE/
-├── package.json             # Node dependencies
-├── vite.config.ts           # Build configuration
-│
-├── src/
-│   ├── App.tsx              # Main app component
-│   ├── components/
-│   │   ├── Questionnaire.tsx        # User preference form
-│   │   ├── MovieCard.tsx            # Swipeable movie card
-│   │   └── Results.tsx              # Final recommendations
-│   ├── lib/
-│   │   ├── api.ts                   # Backend API client
-│   │   └── movieData.ts             # Data types
-│   └── pages/
-│       └── Home.tsx                 # Main page
-│
-└── .env                     # Backend URL config (optional)
-```
-
----
-
-## Configuration
-
-### Backend Configuration (DATA_PROJECT/)
-
-**TMDb API Key** (Required)
-```bash
-# DATA_PROJECT/config/tmdb_config.json
-{
-  "api_key": "your_api_key_here"
-}
-```
-
-Get key from: https://www.themoviedb.org/settings/api
-
-### Frontend Configuration (DATA_WEBSITE/)
-
-**Backend URL** (Optional - defaults work)
-```bash
-# DATA_WEBSITE/.env
-VITE_API_URL=http://localhost:5000
-```
-
-Only change if backend runs on different port.
-
----
-
-## Testing the Connection
-
-### Step 1: Test Backend Independently
-
-```bash
-cd DATA_PROJECT
-python main.py
-
-# Should see:
-# ========================================
-# STARTING API SERVER
-# ========================================
-# Port: 5000
-# ...
-```
-
-### Step 2: Verify Backend Health
-
-```bash
-curl http://localhost:5000/health
-
-# Should return:
-# {
-#   "status": "ok",
-#   "num_movies": 45207,
-#   "has_keywords": true
-# }
-```
-
-### Step 3: Test Frontend Connection
-
-```bash
-cd DATA_WEBSITE
-npm run dev
-
-# Open http://localhost:5173
-# Click through questionnaire
-# If movies load: Connected successfully
-# If error: Check backend is running on port 5000
-```
-
----
-
-## Machine Learning Details
-
-### Models Used
-
-**1. Collaborative Filtering (25% weight)**
-- Algorithm: Alternating Least Squares (ALS)
-- Dimensions: 50 latent factors
-- Users: 1000 synthetic users
-- Output: Personalized recommendations
-
-**2. Co-occurrence Graph (15% weight)**
-- Algorithm: Item-based collaborative filtering
-- Structure: Sparse adjacency matrix (45K × 45K)
-- Logic: Movies watched together
-
-**3. Content Similarity (15% weight)**
-- Algorithm: TF-IDF + Cosine Similarity
-- Features: Genres, keywords, directors
-- Logic: Thematic matching
-
-**4. Hybrid Scoring (100% total)**
-```
-score = 25% genre_match      # User's explicit preference
-      + 25% CF_score         # Collaborative filtering
-      + 15% quality          # Rating + vote confidence
-      + 15% graph_score      # Co-occurrence
-      + 10% session          # Session similarity
-      + 10% other            # Era, keywords, region
-```
-
-### Dataset Statistics
-
-- Total movies: 45,207
-- Data source: IMDb (filtered from millions)
-- Enrichment: TMDb API (99.3% coverage)
-- Quality filter: ≥1000 votes per movie
-- Rating filter: 6.0+ minimum
-- Genres: 15+ distinct genres
-- Keywords: Thousands of thematic tags
 
 ---
 
 ## Troubleshooting
 
-### Backend Issues
-
-**"ModuleNotFoundError"**
+**Models not found:**
 ```bash
-cd DATA_PROJECT
-pip install -r requirements.txt
+python main.py --pipeline
 ```
 
-**"FileNotFoundError: movies.parquet"**
-```bash
-# Option 1: Use pre-trained models (if provided)
-# Option 2: Build from scratch
-python main.py --pipeline  # Takes 2-4 hours
-```
-
-**"Port 5000 already in use"**
+**Port conflicts:**
 ```bash
 python main.py --port 8000
-# Update frontend .env: VITE_API_URL=http://localhost:8000
 ```
 
-### Frontend Issues
+**CORS errors:**
+- Verify backend running on port 5000
+- Check frontend `.env` configuration
 
-**"Cannot connect to backend"**
-```bash
-# Check backend is running
-curl http://localhost:5000/health
-
-# Check .env file
-cat .env
-# Should have: VITE_API_URL=http://localhost:5000
-```
-
-**"npm install fails"**
-```bash
-rm -rf node_modules package-lock.json
-npm install
-```
-
-**"Page loads but no movies"**
-1. Check browser console (F12)
-2. Check backend terminal for errors
-3. Verify tmdb_config.json exists
-4. Check backend logs for "Smart system loaded"
-
-### CORS Issues
-
-If you see CORS errors in browser console:
-
-```bash
-# Backend (api_smart.py) already has CORS enabled
-# Line 44: CORS(app)
-
-# If still issues, check:
-# 1. Backend running on correct port (5000)
-# 2. Frontend using correct URL in .env
-# 3. Browser cache (Ctrl+Shift+R to hard refresh)
-```
+**Connection issues:**
+- Verify both backend and frontend running
+- Check `curl http://localhost:5000/health`
 
 ---
 
-## Performance Metrics
+## Performance
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Genre Match Rate | 100% | 100% |
-| Average Quality | 7.5+ | 7.9/10 |
-| TMDb Coverage | 95%+ | 99.3% |
-| Response Time | <500ms | <200ms |
-| Dataset Size | 40K+ | 45,207 |
-
----
-
-## Frontend Features
-
-- Modern React UI with TypeScript
-- Swipeable movie cards (left/right/up)
-- Real-time keyword suggestions
-- Responsive design
-- Error handling
-- Loading states
-- TMDb poster images
-
-## API Endpoints
-
-- `GET /health` - System status
-- `GET /api/questionnaire/options` - Available genres, eras
-- `POST /api/questionnaire/keywords` - Keyword suggestions
-- `POST /api/recommend` - Get recommendations
-- `POST /api/feedback` - Record swipe action
-- `GET /api/movie/<id>` - Movie details
-
-Full docs: `DATA_PROJECT/docs/API_DOCUMENTATION.md`
-
----
-
-## Development Notes
-
-**Course:** Advanced Programming 2025
-**Institution:** HEC Lausanne / UNIL
-**Built with:** Claude Code (AI coding assistant)
-
-### Technologies
-
-**Backend:**
-- Python 3.9+
-- Flask + Flask-CORS
-- NumPy, pandas, SciPy
-- Parquet (pyarrow)
-
-**Frontend:**
-- React 18 + TypeScript
-- Vite (build tool)
-- Tailwind CSS
-- shadcn/ui components
+- **Dataset:** 45,207 movies
+- **API response time:** <200ms
+- **Recommendation generation:** <150ms
+- **TMDb coverage:** 99.3%
 
 ---
 
@@ -517,39 +443,3 @@ Full docs: `DATA_PROJECT/docs/API_DOCUMENTATION.md`
 
 Educational project for Advanced Programming 2025.
 Not for commercial use.
-
-Data sources:
-- IMDb datasets: https://datasets.imdbws.com/
-- TMDb API: https://www.themoviedb.org/
-
----
-
-**Can't get it running?**
-
-Try the CLI version first - no frontend setup needed:
-```bash
-cd DATA_PROJECT
-python main.py --cli
-```
-
-**Still stuck?**
-
-1. Check all steps in "Installation" section
-2. Verify both terminals are running
-3. Check browser console for errors (F12)
-4. Verify backend health: `curl http://localhost:5000/health`
-
----
-
-**Ready to start? Run these commands:**
-
-```bash
-# Terminal 1
-cd DATA_PROJECT && python main.py
-
-# Terminal 2
-cd DATA_WEBSITE && npm run dev
-
-# Browser
-# Open http://localhost:5173
-```
