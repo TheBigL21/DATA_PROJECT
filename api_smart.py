@@ -52,6 +52,21 @@ KEYWORD_DB_PATH = SCRIPT_DIR / "output" / "models" / "keyword_database.pkl"
 logger.info("Loading smart recommendation system...")
 try:
     engine = load_smart_system(MODELS_DIR, MOVIES_PATH, KEYWORD_DB_PATH)
+    
+    # CRITICAL FILTER: Ensure only movies with >=1000 votes are used
+    # This ensures consistency even if the parquet file wasn't properly filtered
+    initial_count = len(engine.movies)
+    if 'num_votes' in engine.movies.columns:
+        engine.movies = engine.movies[engine.movies['num_votes'] >= 1000].copy()
+        filtered_count = initial_count - len(engine.movies)
+        if filtered_count > 0:
+            logger.warning(f"Filtered out {filtered_count:,} movies with <1000 votes")
+            logger.info(f"Using {len(engine.movies):,} quality movies (>=1000 votes)")
+        else:
+            logger.info(f"All {len(engine.movies):,} movies have >=1000 votes ✓")
+    else:
+        logger.warning("'num_votes' column not found - cannot filter movies")
+    
     logger.info("✓ Smart system loaded successfully")
     logger.info(f"  - {len(engine.movies):,} movies")
     logger.info(f"  - Keyword analyzer: {'✓' if engine.keyword_analyzer else '✗'}")
@@ -161,10 +176,10 @@ def get_genre_config():
         
         backend_type = evening_type_map.get(evening_type, evening_type)
         
-        # Load genre_allocation.json
-        config_path = Path('./config/genre_allocation.json')
+        # Load genre_allocation.json - USE ABSOLUTE PATH
+        config_path = SCRIPT_DIR / 'config' / 'genre_allocation.json'
         if not config_path.exists():
-            return jsonify({'error': 'Genre configuration file not found'}), 500
+            return jsonify({'error': f'Genre configuration file not found at {config_path}'}), 500
         
         with open(config_path, 'r') as f:
             genre_config = json.load(f)
