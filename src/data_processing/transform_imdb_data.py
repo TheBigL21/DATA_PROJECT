@@ -82,7 +82,11 @@ def build_genre_lists(movies_core: pd.DataFrame, movie_genres: pd.DataFrame) -> 
     # Merge with movies_core to ensure all movies have genre list
     movies_with_genres = movies_core.merge(genre_lists, on='tconst', how='left')
 
-    # Fill missing genres with empty list (should not happen due to data_clean.py constraints)
+    # Ensure 'genres' column exists (in case merge didn't create it)
+    if 'genres' not in movies_with_genres.columns:
+        movies_with_genres['genres'] = None
+
+    # Fill missing genres with empty list
     movies_with_genres['genres'] = movies_with_genres['genres'].apply(
         lambda x: x if isinstance(x, list) else []
     )

@@ -231,7 +231,8 @@ class SmartRecommendationEngine:
                 era_scores.append(era_score)
             
             # Only exclude movies with very low era scores (< 0.3)
-            era_mask_soft = pd.Series(era_scores) >= 0.3
+            # Create Series with same index as candidates to ensure alignment
+            era_mask_soft = pd.Series(era_scores, index=candidates.index) >= 0.3
             candidates = candidates[era_mask_soft].copy()
 
         # Limit to top 200 by votes (popularity proxy for quality)
