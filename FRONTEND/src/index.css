@@ -1,0 +1,76 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 97%;
+    --foreground: 220 20% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 15%;
+
+    --primary: 220 20% 15%;
+    --primary-foreground: 40 33% 97%;
+
+    --secondary: 35 25% 92%;
+    --secondary-foreground: 220 20% 15%;
+
+    --muted: 35 20% 94%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 15 85% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --love: 340 82% 52%;
+    --love-foreground: 0 0% 100%;
+
+    --border: 35 20% 88%;
+    --input: 35 20% 88%;
+    --ring: 220 20% 15%;
+
+    --radius: 0.75rem;
+
+    --shadow-soft: 0 4px 30px hsl(220 20% 15% / 0.08);
+    --shadow-elevated: 0 20px 60px hsl(220 20% 15% / 0.15);
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Outfit', sans-serif;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .glass {
+    @apply bg-card/80 backdrop-blur-xl;
+  }
+
+  .question-text {
+    @apply text-4xl md:text-6xl font-light tracking-wide uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .swipe-hint {
+    @apply text-muted-foreground text-sm uppercase tracking-widest;
+  }
+}
