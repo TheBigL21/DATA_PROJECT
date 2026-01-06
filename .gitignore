@@ -14,5 +14,3 @@ imdb_raw/
 __pycache__/
 venv/
 
-.DS_Store
-**/.DS_Store
