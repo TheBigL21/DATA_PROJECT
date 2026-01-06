@@ -24,7 +24,7 @@ The system respects explicit user intent (genres, era, optional themes), enforce
 
 This is the easiest way to run the project for grading/demo: you use **precomputed data + trained models**, so you do **not** need to download raw IMDb files or fetch TMDb (which can take hours).
 
-### 1) Get and place the data package
+### 1) Get and extract the data package (zip)
 
 You should have the following files inside `DATA_PROJECT/`:
 
@@ -43,7 +43,30 @@ You should have the following files inside `DATA_PROJECT/`:
 - `output/feedback.db` (can be empty; if missing, it will be created on first run)
 
 **Where to get the package**
-I can provide a `.zip` containing the `output/` folder and the required config file (for example by email or as a download link).
+I provide a `.zip` (for example as a GitHub Release asset / download link) containing only the runtime artifacts.
+
+**Extract it into `DATA_PROJECT/`** so it creates `DATA_PROJECT/output/...` and includes `DATA_PROJECT/config/genre_allocation.json`.
+
+Example (macOS/Linux):
+
+```bash
+cd DATA_PROJECT
+unzip /path/to/movie_finder_data_package_*.zip -d .
+```
+
+Alternative (recommended, handles overwrite + verifies):
+
+```bash
+cd DATA_PROJECT
+python setup_from_package.py --package /path/to/movie_finder_data_package_*.zip --force
+```
+
+Then verify:
+
+```bash
+cd DATA_PROJECT
+python verify_runtime_files.py
+```
 
 ### 2) Start the backend API
 
@@ -72,6 +95,10 @@ If your backend runs on a different host/port, set `VITE_API_URL` (environment v
 ```bash
 VITE_API_URL=http://localhost:5000
 ```
+
+**Windows notes**
+- Use PowerShell `Expand-Archive` or a GUI unzip tool to extract the zip into `DATA_PROJECT\`.
+- If you change backend port, update `VITE_API_URL` accordingly.
 
 ---
 
@@ -142,6 +169,7 @@ DATA_WEBSITE/
 - **Frontend cannot reach backend**: check `http://localhost:5000/health` and set `VITE_API_URL` if needed.
 - **Port already in use**: run `python main.py --port 8000` (and update `VITE_API_URL`).
 - **Models not found**: you are missing the data package; either extract it into `DATA_PROJECT/output/` or run the pipeline.
+- **Quick Run check**: run `python verify_runtime_files.py` inside `DATA_PROJECT/` to see exactly what is missing.
 - **CORS errors**: ensure backend is running and you are calling the correct URL/port.
 - **Pipeline fails on TMDb**: confirm `TMDB_API_KEY` is set and that you are respecting rate limits.
 

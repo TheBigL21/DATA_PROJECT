@@ -122,10 +122,14 @@ CLI tools work without any frontend setup.
             print("\n\nServer stopped.")
         except Exception as e:
             print(f"\nError starting server: {e}")
-            print("\nMake sure:")
-            print("  1. Models are trained (run with --pipeline)")
-            print("  2. Required files exist in output/ directory")
-            print("  3. No other process is using port", args.port)
+            print("\nMost common causes:")
+            print("  1) Missing runtime artifacts (Quick Run):")
+            print("     - You need the data package extracted into DATA_PROJECT/")
+            print("     - Verify with: python verify_runtime_files.py")
+            print("  2) You haven't generated artifacts yet (Full Pipeline):")
+            print("     - Run: python main.py --pipeline  (takes hours)")
+            print("  3) Port already in use:")
+            print(f"     - Try: python main.py --port 8000  (and set VITE_API_URL accordingly)")
 
 
 if __name__ == '__main__':
