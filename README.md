@@ -33,16 +33,20 @@ repo-root/
     recommendation/   # Recommendation engine
   data/
     raw/              # Raw data files (IMDb, etc.)
-  results/            # Output files (models, processed data, logs)
+    processed/        # Processed data files (movies.parquet, etc.)
+    models/           # Trained model artifacts (CF factors, graph, keyword DB, etc.)
+    interactive_learning/  # Interactive learning models
+    feedback.db       # SQLite database for user feedback
+    *.parquet         # Additional processed data files
   frontend/           # React frontend (optional, separate from required structure)
 ```
 
 ### Backend (Python package in `src/`)
 - **Role**: serves a Flask REST API and runs the recommendation engine.
 - **What it loads at runtime**:
-  - `results/processed/movies.parquet` (movie catalog + metadata)
-  - `results/models/*` (trained model artifacts: CF factors, graph, optional keyword DB/content similarity)
-  - `results/feedback.db` (SQLite database created/updated during usage)
+  - `data/processed/movies.parquet` (movie catalog + metadata)
+  - `data/models/*` (trained model artifacts: CF factors, graph, optional keyword DB/content similarity)
+  - `data/feedback.db` (SQLite database created/updated during usage)
   - `src/config/genre_allocation.json` (context → core/extended genre mapping)
 
 Key entrypoints:
@@ -87,7 +91,7 @@ Key file:
 
 5. **Frontend records swipe feedback**
    - Calls `POST /api/feedback`
-   - Backend persists feedback to `results/feedback.db` so future sessions can adapt
+   - Backend persists feedback to `data/feedback.db` so future sessions can adapt
 
 ### Backend endpoints used by the frontend
 - `GET /health`
@@ -121,7 +125,7 @@ For grading/demo, the backend is designed to run from **precomputed artifacts** 
 
 If you were given a "data package" zip:
 - Extract it into the repo root so it creates:
-  - `results/...` (models and processed data)
+  - `data/...` (models and processed data)
   - `src/config/genre_allocation.json`
 
 Recommended extraction (safe + verifies):
@@ -195,7 +199,7 @@ Example run (adjust paths to your machine):
 
 ```bash
 # From repo root
-python -m src.run_pipeline --imdb-dir data/raw/imdb_raw --output-dir ./results
+python -m src.run_pipeline --imdb-dir data/raw/imdb_raw --output-dir ./data
 ```
 
 For most demos and grading, Quick Run is the intended path.

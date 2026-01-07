@@ -380,10 +380,10 @@ def main():
     print("\nInitializing Movie Finder...")
     try:
         # Use absolute paths relative to repo root
-        models_dir = REPO_ROOT / 'results' / 'models'
-        movies_path = REPO_ROOT / 'results' / 'processed' / 'movies.parquet'
-        keyword_db_path = REPO_ROOT / 'results' / 'models' / 'keyword_database.pkl'
-        feedback_db_path = REPO_ROOT / 'results' / 'feedback.db'
+        models_dir = REPO_ROOT / 'data' / 'models'
+        movies_path = REPO_ROOT / 'data' / 'processed' / 'movies.parquet'
+        keyword_db_path = REPO_ROOT / 'data' / 'models' / 'keyword_database.pkl'
+        feedback_db_path = REPO_ROOT / 'data' / 'feedback.db'
         engine = load_smart_system(
             models_dir, 
             movies_path, 

@@ -98,35 +98,72 @@ CLI tools work without any frontend setup.
 
     # Default: Start API server
     else:
+        import socket
+        
+        def find_available_port(start_port=5000, max_attempts=100):
+            """Find the first available port starting from start_port"""
+            for port in range(start_port, start_port + max_attempts):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(('', port))
+                        return port
+                except OSError:
+                    continue
+            raise RuntimeError(f"Could not find available port in range {start_port}-{start_port + max_attempts}")
+        
+        # Check if requested port is available, if not find another
+        requested_port = args.port
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', requested_port))
+                actual_port = requested_port
+                port_changed = False
+        except OSError:
+            print(f"⚠ Port {requested_port} is already in use.")
+            actual_port = find_available_port(requested_port + 1)
+            port_changed = True
+            print(f"✓ Using alternative port: {actual_port}")
+        
+        # Write backend port to file for frontend to read
+        backend_port_file = REPO_ROOT / '.backend-port'
+        with open(backend_port_file, 'w') as f:
+            f.write(str(actual_port))
+        if port_changed:
+            print(f"✓ Backend port ({actual_port}) written to .backend-port")
+        
         print("=" * 60)
         print("STARTING API SERVER")
         print("=" * 60)
-        print(f"Port: {args.port}")
+        print(f"Port: {actual_port}")
         print(f"Debug mode: {args.debug}")
         print("\nEndpoints available:")
-        print(f"  - Health check: http://localhost:{args.port}/health")
+        print(f"  - Health check: http://localhost:{actual_port}/health")
         print(f"  - API docs: See docs/API_DOCUMENTATION.md")
-        print("\nThe frontend can now connect to this server.")
+        print("\nThe frontend can now connect via Vite proxy.")
+        if port_changed:
+            print("⚠ NOTE: If frontend is already running, restart it to pick up the new port.")
         print("Press Ctrl+C to stop the server.\n")
 
         try:
             app.run(
                 host='0.0.0.0',
-                port=args.port,
+                port=actual_port,
                 debug=args.debug
             )
         except KeyboardInterrupt:
             print("\n\nServer stopped.")
+            # Clean up port file on exit
+            backend_port_file = REPO_ROOT / '.backend-port'
+            if backend_port_file.exists():
+                backend_port_file.unlink()
         except Exception as e:
             print(f"\nError starting server: {e}")
             print("\nMost common causes:")
             print("  1) Missing runtime artifacts (Quick Run):")
             print("     - You need the data package extracted into DATA_PROJECT/")
-            print("     - Verify with: python -m src.verify_runtime_files or python src/verify_runtime_files.py")
+            print("     - Verify with: python -m src.verify_runtime_files")
             print("  2) You haven't generated artifacts yet (Full Pipeline):")
             print("     - Run: python main.py --pipeline  (takes hours)")
-            print("  3) Port already in use:")
-            print(f"     - Try: python main.py --port 8000  (and set VITE_API_URL accordingly)")
 
 
 if __name__ == '__main__':

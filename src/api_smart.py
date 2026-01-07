@@ -44,10 +44,10 @@ CORS(app)  # Enable CORS for frontend
 
 # Load recommendation system
 # Use absolute paths relative to repo root
-MODELS_DIR = REPO_ROOT / "results" / "models"
-MOVIES_PATH = REPO_ROOT / "results" / "processed" / "movies.parquet"
-KEYWORD_DB_PATH = REPO_ROOT / "results" / "models" / "keyword_database.pkl"
-FEEDBACK_DB_PATH = REPO_ROOT / "results" / "feedback.db"
+MODELS_DIR = REPO_ROOT / "data" / "models"
+MOVIES_PATH = REPO_ROOT / "data" / "processed" / "movies.parquet"
+KEYWORD_DB_PATH = REPO_ROOT / "data" / "models" / "keyword_database.pkl"
+FEEDBACK_DB_PATH = REPO_ROOT / "data" / "feedback.db"
 
 logger.info("Loading smart recommendation system...")
 try:

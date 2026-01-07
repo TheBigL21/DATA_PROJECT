@@ -20,20 +20,17 @@ __pycache__/
 
 *.log
 **/*.log
-results/*.log
 
 data/raw/imdb_raw/
 data/raw/*.db
 data/raw/*.json
 data/raw/*.tsv
 data/raw/*.tsv.gz
-
-
-results/
-results/**/*.parquet
-results/**/*.pkl
-results/**/*.npz
-results/**/*.db
+raw/imdb_raw/
+raw/*.db
+raw/*.json
+raw/*.tsv
+raw/*.tsv.gz
 
 
 
@@ -73,14 +70,10 @@ frontend/.vscode/*
 BACKEND/imdb_raw/
 BACKEND/output/
 BACKEND/data/
-results/
 data/raw/
-*.db
-*.sqlite
-*.sqlite3
-*.parquet
-*.npz
-*.pkl
 
 BACKEND/
 FRONTEND/node_modules/
+
+# Backend port file (auto-generated)
+.backend-port

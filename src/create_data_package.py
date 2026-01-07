@@ -39,7 +39,7 @@ def main() -> int:
     parser.add_argument(
         "--include-feedback-db",
         action="store_true",
-        help="Include results/feedback.db if it exists (otherwise it is omitted; it will be created at runtime).",
+        help="Include data/feedback.db if it exists (otherwise it is omitted; it will be created at runtime).",
     )
     args = parser.parse_args()
 
@@ -49,17 +49,17 @@ def main() -> int:
 
     required = {
         "src/config/genre_allocation.json": REPO_ROOT / "src" / "config" / "genre_allocation.json",
-        "results/processed/movies.parquet": REPO_ROOT / "results" / "processed" / "movies.parquet",
-        "results/models/user_factors.npy": REPO_ROOT / "results" / "models" / "user_factors.npy",
-        "results/models/movie_factors.npy": REPO_ROOT / "results" / "models" / "movie_factors.npy",
-        "results/models/model_metadata.json": REPO_ROOT / "results" / "models" / "model_metadata.json",
-        "results/models/adjacency_matrix.npz": REPO_ROOT / "results" / "models" / "adjacency_matrix.npz",
-        "results/models/graph_metadata.json": REPO_ROOT / "results" / "models" / "graph_metadata.json",
+        "data/processed/movies.parquet": REPO_ROOT / "data" / "processed" / "movies.parquet",
+        "data/models/user_factors.npy": REPO_ROOT / "data" / "models" / "user_factors.npy",
+        "data/models/movie_factors.npy": REPO_ROOT / "data" / "models" / "movie_factors.npy",
+        "data/models/model_metadata.json": REPO_ROOT / "data" / "models" / "model_metadata.json",
+        "data/models/adjacency_matrix.npz": REPO_ROOT / "data" / "models" / "adjacency_matrix.npz",
+        "data/models/graph_metadata.json": REPO_ROOT / "data" / "models" / "graph_metadata.json",
     }
 
     optional = {
-        "results/models/keyword_database.pkl": REPO_ROOT / "results" / "models" / "keyword_database.pkl",
-        "results/models/content_similarity.pkl": REPO_ROOT / "results" / "models" / "content_similarity.pkl",
+        "data/models/keyword_database.pkl": REPO_ROOT / "data" / "models" / "keyword_database.pkl",
+        "data/models/content_similarity.pkl": REPO_ROOT / "data" / "models" / "content_similarity.pkl",
     }
 
     missing_required = [k for k, v in required.items() if not v.exists()]
@@ -94,10 +94,10 @@ def main() -> int:
                 manifest["includes_optional"].append(arc)
 
         # Optional feedback DB (only if flag enabled and file exists)
-        feedback_db = REPO_ROOT / "results" / "feedback.db"
+        feedback_db = REPO_ROOT / "data" / "feedback.db"
         if args.include_feedback_db and feedback_db.exists():
-            zf.write(feedback_db, arcname="results/feedback.db")
-            manifest["includes_optional"].append("results/feedback.db")
+            zf.write(feedback_db, arcname="data/feedback.db")
+            manifest["includes_optional"].append("data/feedback.db")
 
         # Add manifest
         zf.writestr("MANIFEST.json", json.dumps(manifest, indent=2))

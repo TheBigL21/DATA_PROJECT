@@ -540,11 +540,11 @@ def main():
     print_header()
 
     # Configuration - Use absolute paths relative to repo root
-    models_dir = REPO_ROOT / 'results' / 'models'
-    movies_path = REPO_ROOT / 'results' / 'processed' / 'movies.parquet'
-    keyword_db_path = REPO_ROOT / 'results' / 'models' / 'keyword_database.pkl'
-    feedback_db_path = REPO_ROOT / 'results' / 'feedback.db'
-    storage_dir = REPO_ROOT / 'results' / 'interactive_learning'
+    models_dir = REPO_ROOT / 'data' / 'models'
+    movies_path = REPO_ROOT / 'data' / 'processed' / 'movies.parquet'
+    keyword_db_path = REPO_ROOT / 'data' / 'models' / 'keyword_database.pkl'
+    feedback_db_path = REPO_ROOT / 'data' / 'feedback.db'
+    storage_dir = REPO_ROOT / 'data' / 'interactive_learning'
 
     user_id = 0  # Demo user ID (in production, use actual user ID)
     session_id = str(uuid.uuid4())[:8]

@@ -1,0 +1,7 @@
+{
+  "latent_dim": 50,
+  "reg_lambda": 0.01,
+  "iterations": 20,
+  "num_users": 1000,
+  "num_movies": 67319
+}

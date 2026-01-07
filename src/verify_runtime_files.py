@@ -29,18 +29,18 @@ def main() -> int:
 
     required_files = [
         REPO_ROOT / "src" / "config" / "genre_allocation.json",
-        REPO_ROOT / "results" / "processed" / "movies.parquet",
-        REPO_ROOT / "results" / "models" / "user_factors.npy",
-        REPO_ROOT / "results" / "models" / "movie_factors.npy",
-        REPO_ROOT / "results" / "models" / "model_metadata.json",
-        REPO_ROOT / "results" / "models" / "adjacency_matrix.npz",
-        REPO_ROOT / "results" / "models" / "graph_metadata.json",
+        REPO_ROOT / "data" / "processed" / "movies.parquet",
+        REPO_ROOT / "data" / "models" / "user_factors.npy",
+        REPO_ROOT / "data" / "models" / "movie_factors.npy",
+        REPO_ROOT / "data" / "models" / "model_metadata.json",
+        REPO_ROOT / "data" / "models" / "adjacency_matrix.npz",
+        REPO_ROOT / "data" / "models" / "graph_metadata.json",
     ]
 
     optional_files = [
-        REPO_ROOT / "results" / "models" / "keyword_database.pkl",
-        REPO_ROOT / "results" / "models" / "content_similarity.pkl",
-        REPO_ROOT / "results" / "feedback.db",
+        REPO_ROOT / "data" / "models" / "keyword_database.pkl",
+        REPO_ROOT / "data" / "models" / "content_similarity.pkl",
+        REPO_ROOT / "data" / "feedback.db",
     ]
 
     missing_required = [p for p in required_files if not p.exists()]
@@ -56,7 +56,7 @@ def main() -> int:
         print("\nHow to fix (Quick Run):")
         print("  1) Download the data package zip (movie_finder_data_package_*.zip)")
         print("  2) Extract it into DATA_PROJECT/ so it creates:")
-        print("     - DATA_PROJECT/results/... and DATA_PROJECT/src/config/genre_allocation.json")
+        print("     - DATA_PROJECT/data/... and DATA_PROJECT/src/config/genre_allocation.json")
         print("\nAlternative fix (slow):")
         print("  - Run the full pipeline: python main.py --pipeline")
         return 1
@@ -73,7 +73,7 @@ def main() -> int:
     try:
         import pandas as pd  # type: ignore
 
-        movies_path = REPO_ROOT / "results" / "processed" / "movies.parquet"
+        movies_path = REPO_ROOT / "data" / "processed" / "movies.parquet"
         df = pd.read_parquet(movies_path)
         # Minimal schema sanity checks used by the API
         for col in ["movie_id", "title", "year", "genres", "avg_rating", "num_votes"]:
@@ -81,7 +81,7 @@ def main() -> int:
                 raise ValueError(f"movies.parquet missing expected column '{col}'")
         print(f"OK: movies.parquet loaded ({len(df):,} rows)")
     except Exception as e:
-        print(f"ERROR: Could not read results/processed/movies.parquet: {e}")
+        print(f"ERROR: Could not read data/processed/movies.parquet: {e}")
         print("Tip: this usually means the data package is incomplete/corrupted, or parquet deps are missing.")
         return 1
 
