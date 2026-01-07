@@ -22,6 +22,9 @@ import logging
 # Compute repo root (this file is in src/, so go up one level)
 REPO_ROOT = Path(__file__).parent.parent
 
+# Add repo root to Python path so imports work when run directly
+sys.path.insert(0, str(REPO_ROOT))
+
 import pandas as pd
 from src.recommendation.smart_engine import load_smart_system
 from src.recommendation.interactive_selector import (

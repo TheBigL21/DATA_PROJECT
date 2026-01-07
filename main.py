@@ -1,11 +1,6 @@
 """
 Movie Recommendation System - Main Entry Point
 
-Advanced Programming 2025 - HEC Lausanne / UNIL
-Developed with assistance from Claude Code
-
-This provides a simple entry point to existing functionality.
-No existing code is modified - just convenient wrappers.
 
 Usage:
     python main.py                    # Start API server (for frontend)
