@@ -1,239 +1,126 @@
+<!-- Hero image (shown above the intro) -->
+<p align="center">
+  <img src="data/images/1rst%20interface.png" alt="Movie Finder - interface preview" width="900">
+</p>
+
 ## Movie Finder — Hybrid Movie Recommendation System (Full-Stack)
 
-Movie Finder is a context-aware movie recommendation system built to reduce the time people spend scrolling on streaming platforms without finding something that fits the moment.
+### Quick intro
+If you’ve ever opened Netflix (or any streaming platform), scrolled for 15 minutes, and still felt undecided… that’s exactly the moment we built **Movie Finder** for.  
+The idea is simple: **you tell the system what kind of evening you want**, and it gives you a short list of movie options that fit that context.
 
-- **A user-first interface**: you start by stating your intent (evening type, genres, era, optional themes)
-- **A hybrid ML ranking engine**: collaborative filtering + co-occurrence graph + optional content similarity
-- **Interactive feedback learning**: swipes are saved and used to adapt recommendations across sessions
-- **A complete full-stack demo**: React frontend + Flask API backend + local data/model artifacts
-
-This project was developed as an educational full-stack + data/ML system. The focus is not only on “predicting what’s popular”, but on building a transparent flow where the user stays in control and the system responds quickly with high-quality options.
-
----
-
-## Project structure (what lives where)
-
-This project follows the required university data science GitHub structure:
-
-```
-repo-root/
-  README.md
-  PROPOSAL.md
-  environment.yml
-  requirements.txt
-  main.py              # Entry point (runs from repo root: python main.py)
-  src/                 # Python source code package
-    api_smart.py       # Flask API server
-    run_pipeline.py    # Data pipeline orchestrator
-    movie_finder.py    # CLI tools
-    ...
-    config/            # Configuration files
-    data_processing/   # Data cleaning and transformation
-    models/           # ML models
-    recommendation/   # Recommendation engine
-  data/
-    raw/              # Raw data files (IMDb, etc.)
-    processed/        # Processed data files (movies.parquet, etc.)
-    models/           # Trained model artifacts (CF factors, graph, keyword DB, etc.)
-    interactive_learning/  # Interactive learning models
-    feedback.db       # SQLite database for user feedback
-    *.parquet         # Additional processed data files
-  frontend/           # React frontend (optional, separate from required structure)
-```
-
-### Backend (Python package in `src/`)
-- **Role**: serves a Flask REST API and runs the recommendation engine.
-- **What it loads at runtime**:
-  - `data/processed/movies.parquet` (movie catalog + metadata)
-  - `data/models/*` (trained model artifacts: CF factors, graph, optional keyword DB/content similarity)
-  - `data/feedback.db` (SQLite database created/updated during usage)
-  - `src/config/genre_allocation.json` (context → core/extended genre mapping)
-
-Key entrypoints:
-- `main.py` (repo root): thin entry point that imports from `src/` (API server by default; optional CLI and pipeline flags)
-- `src/api_smart.py`: Flask app defining the API endpoints
-
-### Frontend (`frontend/`)
-- **Role**: React + TypeScript web UI that calls the backend API.
-- **Dev server**: Vite on port **8080**
-- **API configuration**: `VITE_API_URL` (defaults to `http://localhost:5000`)
-- **Note**: Frontend is optional and separate from the required data science structure
-
-Key file:
-- `frontend/src/lib/api.ts`: API client used by the UI
+### The problem → our approach
+- **Problem**: most recommendations are great at “popular right now”, but not always great at “what fits my mood / situation tonight”.
+- **Our approach**: a short questionnaire + a **hybrid ranking engine** that combines multiple signals (instead of relying on a single model), plus a lightweight feedback loop.
 
 ---
 
-## How the system works (end-to-end)
-
-### Runtime flow (the “website path”)
-1. **Frontend loads questionnaire options**
-   - Calls `GET /api/questionnaire/options`
-   - Displays evening types, eras, and available genres
-
-2. **Frontend adapts genre choices to the selected context**
-   - Calls `GET /api/questionnaire/genres?evening_type=...`
-   - Shows “popular choices” and an optional extended list
-
-3. **Frontend optionally requests theme suggestions**
-   - Calls `POST /api/questionnaire/keywords` with selected genres
-   - Calls `POST /api/questionnaire/source-material` to suggest an adaptation filter (optional)
-
-4. **Frontend requests recommendations**
-   - Calls `POST /api/recommend`
-   - Backend generates a candidate pool (filters) and computes a hybrid score using:
-     - explicit preferences (genres/era/themes)
-     - collaborative filtering (ALS latent factors)
-     - co-occurrence graph neighbors
-     - optional content similarity (if available)
-     - quality constraints (e.g., minimum vote counts)
-     - feedback learning signals (if available)
-
-5. **Frontend records swipe feedback**
-   - Calls `POST /api/feedback`
-   - Backend persists feedback to `data/feedback.db` so future sessions can adapt
-
-### Backend endpoints used by the frontend
-- `GET /health`
-- `GET /api/questionnaire/options`
-- `GET /api/questionnaire/genres?evening_type=...`
-- `POST /api/questionnaire/keywords`
-- `POST /api/questionnaire/source-material`
-- `POST /api/recommend`
-- `POST /api/feedback`
-- `GET /api/movie/<movie_id>`
+## How it works (fast version)
+1. You choose your **evening type** (date night, friends night, family night, chill solo).
+2. You pick **1–2 genres**, an **era**, and optionally a few **themes**.
+3. The backend ranks candidates using a mix of collaborative filtering + a co-occurrence graph (+ optional content similarity when available).
+4. You browse recommendations and your feedback is saved locally (so the next session can improve).
 
 ---
 
-## Running the project locally (recommended demo path)
+## What’s included in this repo (for grading)
+To make evaluation easy, the runtime artifacts are included directly in the repository under `data/` (around ~73MB).  
+That means **you can run the project without downloading large datasets**.
 
-### Requirements
-- **Python**: 3.9+ recommended
-- **Node.js**: 18+ recommended
-- **npm**: comes with Node
-
-You will run **two processes** in two terminals:
-- Backend on `http://localhost:5000`
-- Frontend on `http://localhost:8080`
+At runtime, the backend loads:
+- `data/processed/movies.parquet`
+- `data/models/`
+- `data/feedback.db` (created/updated automatically during usage)
 
 ---
 
-## 1) Backend setup (Quick Run: no pipeline)
+## How to run the project (backend + frontend)
 
-### A) Ensure runtime artifacts exist
-For grading/demo, the backend is designed to run from **precomputed artifacts** (movies + models). These files must exist in the repo root structure.
-
-If you were given a "data package" zip:
-- Extract it into the repo root so it creates:
-  - `data/...` (models and processed data)
-  - `src/config/genre_allocation.json`
-
-Recommended extraction (safe + verifies):
+### Backend (Python)
+From the repo root:
 
 ```bash
-python -m src.setup_from_package --package /path/to/movie_finder_data_package_*.zip --force
-```
-
-Or verify manually:
-
-```bash
-python -m src.verify_runtime_files
-```
-
-### B) Install Python dependencies
-
-```bash
-# From repo root
-python -m venv .venv
-source .venv/bin/activate   # macOS/Linux
-# .venv\Scripts\activate    # Windows PowerShell
-
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### C) Start the API server
-
-```bash
-# From repo root
 python main.py
 ```
 
-Health check:
-- `http://localhost:5000/health`
+- Backend runs at `http://localhost:5000`
+- Health check: `http://localhost:5000/health`
 
----
-
-## 2) Frontend setup
-
-**Note**: The frontend is optional and separate from the required data science structure. It's included for demonstration purposes.
-
-### A) Configure backend URL (optional)
-If your backend is on the default port, you can skip this. Otherwise create `frontend/.env`:
+### Frontend (React)
+In a second terminal:
 
 ```bash
-echo "VITE_API_URL=http://localhost:5000" > frontend/.env
+cd frontend
+npm install
+npm run dev
 ```
 
-### B) Install and run
+- Frontend runs at `http://localhost:8080`
 
-```bash
-# From repo root
-npm --prefix frontend install
-npm --prefix frontend run dev
+---
+
+## How to use it (what you’ll see)
+<table>
+  <tr>
+    <td width="58%" valign="top">
+      <p>
+        Start by answering the questionnaire (intent → genres → era → optional themes).<br><br>
+        Then you can <b>swipe through recommendations</b> until you find a movie you actually want to watch.<br><br>
+        Feedback is stored locally in <code>data/feedback.db</code>.
+      </p>
+    </td>
+    <td width="42%" valign="top">
+      <img src="data/images/swipe%20until%20you%20found%20your%20movie.png" alt="Swipe interface preview" width="420">
+    </td>
+  </tr>
+</table>
+
+---
+
+## Project structure (quick map)
+```
+repo-root/
+  main.py
+  src/                     # backend source code (Flask API + recommendation engine)
+  data/                    # included runtime artifacts (tracked in git)
+    processed/
+    models/
+    interactive_learning/
+    feedback.db
+    images/
+  frontend/                # React UI
 ```
 
-Open:
-- `http://localhost:8080`
+---
+
+## Troubleshooting (common issues)
+- **Frontend shows API errors**
+  - Check that the backend is running: `http://localhost:5000/health`
+  - Restart the frontend if you changed ports
+
+- **Backend complains about missing files**
+  - Confirm these exist:
+    - `data/processed/movies.parquet`
+    - `data/models/`
+
+- **Port conflict**
+  - Start backend on another port:
+    ```bash
+    python main.py --port 8000
+    ```
 
 ---
 
-## Optional: Run the full data pipeline (slow, for completeness)
-
-This rebuilds the dataset and retrains models. It can take hours, mostly due to TMDb rate limits and the size of the data.
-
-High-level requirements:
-- Raw IMDb `.tsv.gz` files (from `https://datasets.imdbws.com/`)
-- A TMDb API key (set `TMDB_API_KEY` in your environment)
-
-Example run (adjust paths to your machine):
-
-```bash
-# From repo root
-python -m src.run_pipeline --imdb-dir data/raw/imdb_raw --output-dir ./data
-```
-
-For most demos and grading, Quick Run is the intended path.
+## Where the main logic is
+- `src/api_smart.py`: Flask endpoints used by the frontend
+- `src/recommendation/smart_engine.py`: hybrid scoring and ranking
+- `src/movie_finder.py` / `src/interactive_movie_finder.py`: CLI modes (optional)
 
 ---
 
-## Troubleshooting
-
-- **Frontend loads but shows API errors**
-  - Confirm backend is running: `http://localhost:5000/health`
-  - Confirm `VITE_API_URL` points to the correct backend URL/port
-
-- **Backend crashes at startup with "missing files"**
-  - Run: `python -m src.verify_runtime_files`
-  - Fix by extracting the data package into repo root (or by running the full pipeline)
-
-- **CORS/network errors in the browser**
-  - Make sure you are calling the correct backend URL
-  - Restart the frontend after changing `frontend/.env`
-
-- **Port conflicts**
-  - Backend: run `python main.py --port 8000` and set `VITE_API_URL=http://localhost:8000`
-  - Frontend: edit `frontend/vite.config.ts` if you need a different port
-
----
-
-## Notes for evaluation (what to look at)
-
-- **Full-stack integration**: React UI calls Flask endpoints and renders live recommendations
-- **Hybrid recommendation logic**: combines multiple signals instead of a single model
-- **User intent is respected**: explicit genre/era choices drive filtering and scoring
-- **Learning loop**: swipe feedback is persisted in SQLite and used to adapt future sessions
-
----
-
-## License / context
-Educational project developed for coursework (Advanced Programming 2025 — HEC Lausanne / UNIL).
+## Optional: rebuild data/models (not required for the demo)
+There is a full pipeline that can rebuild the dataset and retrain models, but it’s slow (hours) and requires downloading IMDb files + a TMDb API key.  
+For grading/demo, the intended path is using the included `data/` artifacts.

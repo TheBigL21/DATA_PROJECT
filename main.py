@@ -1,13 +1,6 @@
 """
-Movie Recommendation System - Main Entry Point
+Movie Recommendation System 
 
-
-Usage:
-    python main.py                    # Start API server (for frontend)
-    python main.py --cli              # Run simple CLI demo
-    python main.py --interactive      # Run interactive swipe CLI
-    python main.py --pipeline         # Run data pipeline (2-4 hours)
-    python main.py --help             # Show all options
 """
 
 import sys

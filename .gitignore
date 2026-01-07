@@ -66,7 +66,9 @@ frontend/.vscode/*
 .ntvs
 *.suo
 
+results.old/
 
+BACKEND/
 BACKEND/imdb_raw/
 BACKEND/output/
 BACKEND/data/
@@ -75,5 +77,5 @@ data/raw/
 BACKEND/
 FRONTEND/node_modules/
 
-# Backend port file (auto-generated)
+
 .backend-port

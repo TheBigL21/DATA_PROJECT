@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import json
 import uuid
-from tkinter import E
+# from tkinter import E
 import pandas as pd
 
 # Compute repo root (this file is in src/, so go up one level)
