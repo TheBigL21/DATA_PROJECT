@@ -1,91 +1,64 @@
+
+
 .venv/
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
-data/
-output/
-imdb_raw/
-*.parquet
-*.pkl
-*.npz
-*.tsv
-*.tsv.gz
-*.csv
-__pycache__/
 venv/
+**/.venv/
+**/venv/
 
-################################
-# Python / Backend (BACKEND/)
-################################
 
-# Virtual environments
-BACKEND/.venv/
-BACKEND/venv/
-
-# Python cache
-BACKEND/_pycache_/
-BACKEND/**/_pycache_/
+__pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
 
-# Jupyter
-BACKEND/.ipynb_checkpoints/
 
-# Logs
-BACKEND/*.log
-BACKEND/*/.log
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
 
-# Runtime / generated data (DO NOT COMMIT)
-BACKEND/data/
-BACKEND/output/
-BACKEND/imdb_raw/
 
-# Common data formats (generated artifacts)
-BACKEND/*/.parquet
-BACKEND/*/.pkl
-BACKEND/*/.npz
-BACKEND/*/.tsv
-BACKEND/*/.tsv.gz
-BACKEND/*/.csv
+*.log
+**/*.log
+results/*.log
 
-################################
-# OS junk
-################################
+data/raw/imdb_raw/
+data/raw/*.db
+data/raw/*.json
+data/raw/*.tsv
+data/raw/*.tsv.gz
+
+
+results/
+results/**/*.parquet
+results/**/*.pkl
+results/**/*.npz
+results/**/*.db
+
+
 
 .DS_Store
 
-################################
-# Frontend (FRONTEND/)
-################################
 
-# Dependencies
-FRONTEND/node_modules/
 
-# Build outputs
-FRONTEND/dist/
-FRONTEND/dist-ssr/
-FRONTEND/build/
-FRONTEND/.next/
 
-# Environment files
-FRONTEND/.env
-FRONTEND/.env.local
-FRONTEND/.env.*.local
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/build/
+frontend/.next/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/logs/
+frontend/*.log
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/npm-debug.log*
+frontend/.vscode/*
+!frontend/.vscode/extensions.json
 
-# Logs
-FRONTEND/logs/
-FRONTEND/*.log
-FRONTEND/yarn-debug.log*
-FRONTEND/yarn-error.log*
-FRONTEND/pnpm-debug.log*
-FRONTEND/npm-debug.log*
-
-# Local tooling
-FRONTEND/.vscode/*
-!FRONTEND/.vscode/extensions.json
-
-################################
-# Editor / OS junk (GLOBAL)
-################################
 
 .DS_Store
 .idea/
@@ -95,3 +68,19 @@ FRONTEND/.vscode/*
 *.njsproj
 .ntvs
 *.suo
+
+
+BACKEND/imdb_raw/
+BACKEND/output/
+BACKEND/data/
+results/
+data/raw/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.npz
+*.pkl
+
+BACKEND/
+FRONTEND/node_modules/

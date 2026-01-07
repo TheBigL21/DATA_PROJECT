@@ -13,25 +13,50 @@ This project was developed as an educational full-stack + data/ML system. The fo
 
 ## Project structure (what lives where)
 
-### Backend (`BACKEND/`)
+This project follows the required university data science GitHub structure:
+
+```
+repo-root/
+  README.md
+  PROPOSAL.md
+  environment.yml
+  requirements.txt
+  main.py              # Entry point (runs from repo root: python main.py)
+  src/                 # Python source code package
+    api_smart.py       # Flask API server
+    run_pipeline.py    # Data pipeline orchestrator
+    movie_finder.py    # CLI tools
+    ...
+    config/            # Configuration files
+    data_processing/   # Data cleaning and transformation
+    models/           # ML models
+    recommendation/   # Recommendation engine
+  data/
+    raw/              # Raw data files (IMDb, etc.)
+  results/            # Output files (models, processed data, logs)
+  frontend/           # React frontend (optional, separate from required structure)
+```
+
+### Backend (Python package in `src/`)
 - **Role**: serves a Flask REST API and runs the recommendation engine.
 - **What it loads at runtime**:
-  - `BACKEND/output/processed/movies.parquet` (movie catalog + metadata)
-  - `BACKEND/output/models/*` (trained model artifacts: CF factors, graph, optional keyword DB/content similarity)
-  - `BACKEND/output/feedback.db` (SQLite database created/updated during usage)
-  - `BACKEND/config/genre_allocation.json` (context → core/extended genre mapping)
+  - `results/processed/movies.parquet` (movie catalog + metadata)
+  - `results/models/*` (trained model artifacts: CF factors, graph, optional keyword DB/content similarity)
+  - `results/feedback.db` (SQLite database created/updated during usage)
+  - `src/config/genre_allocation.json` (context → core/extended genre mapping)
 
 Key entrypoints:
-- `BACKEND/main.py`: convenience wrapper (API server by default; optional CLI and pipeline flags)
-- `BACKEND/api_smart.py`: Flask app defining the API endpoints
+- `main.py` (repo root): thin entry point that imports from `src/` (API server by default; optional CLI and pipeline flags)
+- `src/api_smart.py`: Flask app defining the API endpoints
 
-### Frontend (`FRONTEND/`)
+### Frontend (`frontend/`)
 - **Role**: React + TypeScript web UI that calls the backend API.
 - **Dev server**: Vite on port **8080**
 - **API configuration**: `VITE_API_URL` (defaults to `http://localhost:5000`)
+- **Note**: Frontend is optional and separate from the required data science structure
 
 Key file:
-- `FRONTEND/src/lib/api.ts`: API client used by the UI
+- `frontend/src/lib/api.ts`: API client used by the UI
 
 ---
 
@@ -62,7 +87,7 @@ Key file:
 
 5. **Frontend records swipe feedback**
    - Calls `POST /api/feedback`
-   - Backend persists feedback to `BACKEND/output/feedback.db` so future sessions can adapt
+   - Backend persists feedback to `results/feedback.db` so future sessions can adapt
 
 ### Backend endpoints used by the frontend
 - `GET /health`
@@ -92,31 +117,29 @@ You will run **two processes** in two terminals:
 ## 1) Backend setup (Quick Run: no pipeline)
 
 ### A) Ensure runtime artifacts exist
-For grading/demo, the backend is designed to run from **precomputed artifacts** (movies + models). These files must exist under `BACKEND/`.
+For grading/demo, the backend is designed to run from **precomputed artifacts** (movies + models). These files must exist in the repo root structure.
 
-If you were given a “data package” zip:
-- Extract it into `BACKEND/` so it creates:
-  - `BACKEND/output/...`
-  - `BACKEND/config/genre_allocation.json`
+If you were given a "data package" zip:
+- Extract it into the repo root so it creates:
+  - `results/...` (models and processed data)
+  - `src/config/genre_allocation.json`
 
 Recommended extraction (safe + verifies):
 
 ```bash
-cd BACKEND
-python setup_from_package.py --package /path/to/movie_finder_data_package_*.zip --force
+python -m src.setup_from_package --package /path/to/movie_finder_data_package_*.zip --force
 ```
 
 Or verify manually:
 
 ```bash
-cd BACKEND
-python verify_runtime_files.py
+python -m src.verify_runtime_files
 ```
 
 ### B) Install Python dependencies
 
 ```bash
-cd BACKEND
+# From repo root
 python -m venv .venv
 source .venv/bin/activate   # macOS/Linux
 # .venv\Scripts\activate    # Windows PowerShell
@@ -127,7 +150,7 @@ pip install -r requirements.txt
 ### C) Start the API server
 
 ```bash
-cd BACKEND
+# From repo root
 python main.py
 ```
 
@@ -138,20 +161,21 @@ Health check:
 
 ## 2) Frontend setup
 
+**Note**: The frontend is optional and separate from the required data science structure. It's included for demonstration purposes.
+
 ### A) Configure backend URL (optional)
-If your backend is on the default port, you can skip this. Otherwise create `FRONTEND/.env`:
+If your backend is on the default port, you can skip this. Otherwise create `frontend/.env`:
 
 ```bash
-cd FRONTEND
-echo "VITE_API_URL=http://localhost:5000" > .env
+echo "VITE_API_URL=http://localhost:5000" > frontend/.env
 ```
 
 ### B) Install and run
 
 ```bash
-cd FRONTEND
-npm install
-npm run dev
+# From repo root
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
 Open:
@@ -170,8 +194,8 @@ High-level requirements:
 Example run (adjust paths to your machine):
 
 ```bash
-cd BACKEND
-python run_pipeline.py --imdb-dir /path/to/imdb_raw --output-dir ./output
+# From repo root
+python -m src.run_pipeline --imdb-dir data/raw/imdb_raw --output-dir ./results
 ```
 
 For most demos and grading, Quick Run is the intended path.
@@ -184,17 +208,17 @@ For most demos and grading, Quick Run is the intended path.
   - Confirm backend is running: `http://localhost:5000/health`
   - Confirm `VITE_API_URL` points to the correct backend URL/port
 
-- **Backend crashes at startup with “missing files”**
-  - Run: `cd BACKEND && python verify_runtime_files.py`
-  - Fix by extracting the data package into `BACKEND/` (or by running the full pipeline)
+- **Backend crashes at startup with "missing files"**
+  - Run: `python -m src.verify_runtime_files`
+  - Fix by extracting the data package into repo root (or by running the full pipeline)
 
 - **CORS/network errors in the browser**
   - Make sure you are calling the correct backend URL
-  - Restart the frontend after changing `FRONTEND/.env`
+  - Restart the frontend after changing `frontend/.env`
 
 - **Port conflicts**
   - Backend: run `python main.py --port 8000` and set `VITE_API_URL=http://localhost:8000`
-  - Frontend: edit `FRONTEND/vite.config.ts` if you need a different port
+  - Frontend: edit `frontend/vite.config.ts` if you need a different port
 
 ---
 

@@ -1,0 +1,18 @@
+{
+  "Chill Evening by myself": {
+    "core": ["thriller", "drama", "sci-fi", "mystery", "horror", "documentary"],
+    "extended": ["crime", "biography", "film-noir", "fantasy", "war", "western", "action", "adventure", "animation", "comedy", "family", "history", "music", "musical", "news", "romance", "sport"]
+  },
+  "Date night": {
+    "core": ["romance", "comedy", "drama", "thriller", "fantasy", "adventure"],
+    "extended": ["sci-fi", "mystery", "musical", "history", "crime", "music", "action", "animation", "biography", "documentary", "family", "film-noir", "horror", "news", "sport", "war", "western"]
+  },
+  "Family night": {
+    "core": ["animation", "adventure", "comedy", "fantasy", "family", "musical"],
+    "extended": ["sci-fi", "action", "biography", "sport", "music", "drama", "crime", "documentary", "film-noir", "history", "horror", "mystery", "news", "romance", "thriller", "war", "western"]
+  },
+  "Friends night": {
+    "core": ["comedy", "action", "horror", "thriller", "sci-fi", "adventure"],
+    "extended": ["crime", "mystery", "fantasy", "war", "sport", "western", "animation", "biography", "documentary", "drama", "family", "film-noir", "history", "music", "musical", "news", "romance"]
+  }
+}
