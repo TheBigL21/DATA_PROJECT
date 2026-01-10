@@ -21,6 +21,8 @@ import sys
 import logging
 import json
 import pandas as pd
+import sqlite3
+from typing import List, Tuple, Set
 
 # Compute repo root (this file is in src/, so go up one level)
 REPO_ROOT = Path(__file__).parent.parent
@@ -86,6 +88,73 @@ try:
 except Exception as e:
     logger.error(f"Failed to load system: {e}")
     raise
+
+
+# ---------------------------------------------------------------------------
+# Genre normalization / aliases
+# ---------------------------------------------------------------------------
+# NOTE: The dataset genres in movies.parquet use "science fiction" (not "sci-fi")
+# and do not include "film-noir". The UI config historically uses "sci-fi" and
+# "film-noir", so we normalize incoming requests here to keep everything working.
+def _normalize_genres(genres: List[str]) -> Tuple[List[str], Set[str]]:
+    """
+    Normalize incoming genre labels into dataset-compatible labels.
+
+    Returns:
+        normalized: list of normalized genres (deduped, order-preserving)
+        raw_set: set of raw normalized inputs (lowercase), for feature flags
+    """
+    raw = [str(g).lower().strip() for g in (genres or []) if g]
+    raw_set: Set[str] = set(raw)
+
+    aliases = {
+        # Sci-fi variants -> dataset label
+        'sci-fi': 'science fiction',
+        'sci fi': 'science fiction',
+        'scifi': 'science fiction',
+        'science-fiction': 'science fiction',
+
+        # Musical -> music (dataset has 'music', not 'musical')
+        'musical': 'music',
+        
+        # Film noir isn't a dataset genre; keep alias for backwards compatibility
+        # (though we removed it from UI, old saved contexts might reference it)
+        'film-noir': 'crime',
+        'film noir': 'crime',
+        'noir': 'crime',
+        
+        # Other removed genres kept for backwards compatibility with old saved data
+        'biography': 'drama',  # Map to closest existing genre
+        'sport': 'drama',      # Map to closest existing genre
+        'news': 'documentary', # Map to closest existing genre
+    }
+
+    normalized = [aliases.get(g, g) for g in raw]
+
+    # De-dupe while preserving order
+    seen = set()
+    deduped: List[str] = []
+    for g in normalized:
+        if g and g not in seen:
+            deduped.append(g)
+            seen.add(g)
+
+    return deduped, raw_set
+
+
+# Seed noir-like themes for keyword suggestions when the user picks film-noir.
+# We avoid the literal term "film noir" (often filtered) and use thematic terms.
+NOIR_SEED_KEYWORDS = [
+    'detective',
+    'private investigator',
+    'gangster',
+    'mobster',
+    'conspiracy',
+    'corruption',
+    'investigation',
+    'murder mystery',
+    'blackmail',
+]
 
 
 @app.route('/health', methods=['GET'])
@@ -224,20 +293,54 @@ def generate_keywords():
         if not isinstance(genres, list) or len(genres) == 0:
             return jsonify({'error': 'genres must be a non-empty list'}), 400
 
-        # Generate keywords using KeywordRecommender if available, else fallback to engine
-        if keyword_recommender:
-            # Use KeywordRecommender (same as interactive_movie_finder.py)
-            genres_lower = [g.lower().strip() for g in genres]
-            keywords = keyword_recommender.get_keywords_for_genres(genres_lower, num_keywords=8)
-        elif engine.keyword_analyzer:
-            keywords = engine.suggest_keywords(genres, num_keywords=8)
-        else:
-            keywords = []
+        # Normalize genres (aliases + lowercase) for consistent matching
+        genres_normalized, raw_genres = _normalize_genres(genres)
+
+        # Prefer engine.keyword_analyzer (rebuilt database) if available
+        keywords: List[str] = []
+
+        # If user selected film-noir, seed noir-like keyword suggestions
+        if 'film-noir' in raw_genres or 'film noir' in raw_genres:
+            for kw in NOIR_SEED_KEYWORDS:
+                if kw not in keywords and len(keywords) < 8:
+                    keywords.append(kw)
+
+        if engine.keyword_analyzer:
+            suggested = engine.suggest_keywords(genres_normalized, num_keywords=8)
+            if keywords:
+                # Merge seeded noir keywords + suggested, keep unique, cap at 8
+                merged: List[str] = []
+                for kw in keywords + suggested:
+                    if kw not in merged:
+                        merged.append(kw)
+                    if len(merged) >= 8:
+                        break
+                keywords = merged
+            else:
+                keywords = suggested
+        
+        # Fallback to KeywordRecommender if database didn't return enough keywords
+        if len(keywords) < 4 and keyword_recommender:
+            logger.info(f"KeywordAnalyzer returned {len(keywords)} keywords, falling back to KeywordRecommender")
+            keywords_recommender = keyword_recommender.get_keywords_for_genres(genres_normalized, num_keywords=8)
+            # Merge: prefer database keywords, fill with recommender if needed
+            existing = set(keywords)
+            for kw in keywords_recommender:
+                if kw not in existing and len(keywords) < 8:
+                    keywords.append(kw)
+                    existing.add(kw)
+
+        # Final fallback: if still empty, try to suggest based on common themes
+        if len(keywords) == 0:
+            logger.warning(f"No keywords found for genres {genres_normalized}, returning empty list")
+            # Could add a basic fallback here if needed, but empty is acceptable
 
         return jsonify({'keywords': keywords}), 200
 
     except Exception as e:
         logger.error(f"Error in generate_keywords: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -264,14 +367,16 @@ def get_relevant_source_material():
         
         if not isinstance(genres, list):
             return jsonify({'error': 'genres must be a list'}), 400
+
+        genres_normalized, _ = _normalize_genres(genres)
         
         # Same logic as get_relevant_source_material() in interactive_movie_finder.py
+        # Note: Removed genres that don't exist in dataset (biography, musical, film-noir, news, sport)
         genre_source_map = {
             'fantasy': 'book',
-            'sci-fi': 'book',
+            'science fiction': 'book',
             'romance': 'book',
             'drama': 'true_story',
-            'biography': 'true_story',
             'history': 'true_story',
             'war': 'true_story',
             'action': 'comic',
@@ -280,12 +385,12 @@ def get_relevant_source_material():
             'thriller': 'book',
             'mystery': 'book',
             'horror': 'book',
-            'musical': 'play_musical',
+            'music': 'play_musical',  # Changed from 'musical' to 'music' (dataset has 'music')
             'comedy': 'book'
         }
         
         source_votes = {}
-        for genre in genres:
+        for genre in genres_normalized:
             genre_lower = genre.lower()
             if genre_lower in genre_source_map:
                 source = genre_source_map[genre_lower]
@@ -379,6 +484,9 @@ def recommend():
         if keywords and not isinstance(keywords, list):
             return jsonify({'error': 'keywords must be a list'}), 400
 
+        # Normalize genres to dataset labels (fixes sci-fi / film-noir)
+        genres_normalized, _ = _normalize_genres(genres)
+
         # Generate recommendations
         logger.info(f"Generating recommendations for user {user_id}")
         logger.info(f"  Evening: {evening_type}, Genres: {genres}, Era: {era}, Keywords: {keywords}, Source Material: {source_material}")
@@ -389,7 +497,7 @@ def recommend():
         
         movie_ids = engine.recommend(
             user_id=user_id,
-            genres=genres,
+            genres=genres_normalized,
             era=era,
             source_material=source_material,
             themes=keywords,  # API uses 'keywords' but engine expects 'themes'
@@ -497,6 +605,138 @@ def get_movie(movie_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/users/signup', methods=['POST'])
+def signup():
+    """
+    Create a new user account with a 4-digit display code.
+    
+    Request:
+    {
+        "display_code": "1234"  // 4-digit string (1000-9999, first digit 1-9)
+    }
+    
+    Response (success):
+    {
+        "status": "ok",
+        "user_id": 1234,
+        "display_code": "1234"
+    }
+    
+    Response (error):
+    {
+        "error": "User ID already exists" or "Invalid display code"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if 'display_code' not in data:
+            return jsonify({'error': 'Missing required field: display_code'}), 400
+        
+        display_code = data['display_code']
+        
+        # Validate 4-digit code: first digit must be 1-9
+        import re
+        if not re.match(r'^[1-9]\d{3}$', display_code):
+            return jsonify({'error': 'Invalid display code. Must be 4 digits, first digit 1-9 (1000-9999)'}), 400
+        
+        user_id = int(display_code)
+        
+        # Check if user already exists (by user_id or display_code)
+        if engine.feedback_learner:
+            existing_user_id = engine.feedback_learner.get_user_by_display_code(display_code)
+            if existing_user_id is not None:
+                return jsonify({'error': f'User ID {display_code} already exists'}), 400
+            
+            # Create user
+            success = engine.feedback_learner.create_user(user_id, display_code)
+            if not success:
+                return jsonify({'error': f'User ID {display_code} already exists'}), 400
+            
+            logger.info(f"New user created: user_id={user_id}, display_code={display_code}")
+            return jsonify({
+                'status': 'ok',
+                'user_id': user_id,
+                'display_code': display_code
+            }), 200
+        else:
+            return jsonify({'error': 'Feedback learner not initialized'}), 500
+            
+    except ValueError:
+        return jsonify({'error': 'Invalid display code format'}), 400
+    except Exception as e:
+        logger.error(f"Error in signup: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/users/login', methods=['POST'])
+def login():
+    """
+    Login with a 4-digit display code.
+    
+    Request:
+    {
+        "display_code": "1234"  // 4-digit string
+    }
+    
+    Response (success):
+    {
+        "status": "ok",
+        "user_id": 1234,
+        "display_code": "1234"
+    }
+    
+    Response (error):
+    {
+        "error": "User does not exist"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if 'display_code' not in data:
+            return jsonify({'error': 'Missing required field: display_code'}), 400
+        
+        display_code = data['display_code']
+        
+        # Validate format
+        import re
+        if not re.match(r'^[1-9]\d{3}$', display_code):
+            return jsonify({'error': 'Invalid display code format'}), 400
+        
+        if engine.feedback_learner:
+            user_id = engine.feedback_learner.get_user_by_display_code(display_code)
+            
+            if user_id is None:
+                return jsonify({'error': 'User does not exist'}), 404
+            
+            # Update last_active timestamp
+            conn = sqlite3.connect(engine.feedback_learner.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?
+            """, (user_id,))
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"User login: user_id={user_id}, display_code={display_code}")
+            return jsonify({
+                'status': 'ok',
+                'user_id': user_id,
+                'display_code': display_code
+            }), 200
+        else:
+            return jsonify({'error': 'Feedback learner not initialized'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error in login: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/feedback', methods=['POST'])
 def record_feedback():
     """
@@ -535,9 +775,11 @@ def record_feedback():
         action = data['action']
         session_id = data.get('session_id', f'session_{user_id}_{int(time.time())}')
         
-        # Build context from request
+        # Build context from request (normalize genres so learning isn't split by aliases)
+        raw_context_genres = data.get('genres', [])
+        normalized_context_genres, _ = _normalize_genres(raw_context_genres if isinstance(raw_context_genres, list) else [])
         context = {
-            'genres': data.get('genres', []),
+            'genres': normalized_context_genres,
             'era': data.get('era', 'any'),
             'themes': data.get('themes', [])
         }

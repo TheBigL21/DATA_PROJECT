@@ -56,6 +56,7 @@ export interface RecommendRequest {
   keywords?: string[];
   source_material?: string;
   session_history?: Array<{ movie_id: number; action: 'yes' | 'no' | 'final' }>;
+  session_id?: string;
   top_k?: number;
 }
 
@@ -65,6 +66,11 @@ export interface FeedbackRequest {
   action: 'yes' | 'no' | 'final';
   session_id?: string;
   timestamp?: string;
+  genres?: string[];
+  era?: string;
+  themes?: string[];
+  position_in_session?: number;
+  previous_movie_id?: number;
 }
 
 class ApiClient {
@@ -158,6 +164,32 @@ class ApiClient {
       const error = await response.json().catch(() => ({ error: 'Failed to send feedback' }));
       throw new Error(error.error || 'Failed to send feedback');
     }
+  }
+
+  async signup(displayCode: string): Promise<{ user_id: number; display_code: string }> {
+    const response = await fetch(`${this.baseUrl}/api/users/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_code: displayCode }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to sign up' }));
+      throw new Error(error.error || 'Failed to sign up');
+    }
+    return response.json();
+  }
+
+  async login(displayCode: string): Promise<{ user_id: number; display_code: string }> {
+    const response = await fetch(`${this.baseUrl}/api/users/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_code: displayCode }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to login' }));
+      throw new Error(error.error || 'Failed to login');
+    }
+    return response.json();
   }
 }
 

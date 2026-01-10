@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { QuestionnaireAnswers, EVENING_TYPE_MAP } from '@/lib/movieData';
 import { apiClient, mapSwipeToBackendAction } from '@/lib/api';
-import { ArrowRight, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface QuestionnaireProps {
@@ -125,6 +125,63 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
     }
   };
 
+  // Helper function to determine which fields to clear based on the destination step
+  // When going back, we clear the destination step + all later steps, but keep earlier steps
+  const getFieldsToClear = (destinationStep: Step): Partial<QuestionnaireAnswers> => {
+    switch (destinationStep) {
+      case 'evening_type':
+        // Going back to evening_type: clear everything (there are no earlier steps)
+        return {
+          evening_type: '',
+          genres: [],
+          era: '',
+          keywords: [],
+          source_material: undefined,
+        };
+      case 'genres':
+        // Going back to genres: keep evening_type, clear genres and all later steps
+        return {
+          genres: [],
+          era: '',
+          keywords: [],
+          source_material: undefined,
+        };
+      case 'era':
+        // Going back to era: keep evening_type and genres, clear era and all later steps
+        return {
+          era: '',
+          keywords: [],
+          source_material: undefined,
+        };
+      case 'keywords':
+        // Going back to keywords: keep evening_type, genres, era, clear keywords and source_material
+        return {
+          keywords: [],
+          source_material: undefined,
+        };
+    }
+  };
+
+  const handleBack = () => {
+    if (currentStep > 0) {
+      const nextStepIndex = currentStep - 1;
+      const destinationStep = steps[nextStepIndex];
+      
+      // Clear fields for the destination step and all later steps
+      setAnswers(prev => ({
+        ...prev,
+        ...getFieldsToClear(destinationStep),
+      }));
+      
+      // Reset extended genres view when going back to genres step
+      if (destinationStep === 'genres') {
+        setShowExtendedGenres(false);
+      }
+      
+      setCurrentStep(nextStepIndex);
+    }
+  };
+
   const slideVariants = {
     enter: { opacity: 0, x: 50 },
     center: { opacity: 1, x: 0 },
@@ -159,7 +216,28 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12">
+    <div className="min-h-screen relative flex flex-col items-center justify-center px-6 py-12">
+      {/* Back Button - Top Left */}
+      {currentStep > 0 && (
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+          className="absolute top-6 left-6 z-10"
+        >
+          <Button
+            variant="landingGhost"
+            size="icon"
+            onClick={handleBack}
+            aria-label="Back to previous question"
+            className="h-10 w-10"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+        </motion.div>
+      )}
+
       <div className="w-full max-w-3xl">
         {/* Progress */}
         <motion.div
@@ -237,7 +315,7 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
                         <h3 className="text-sm font-semibold text-muted-foreground mb-4 uppercase tracking-wider">
                           Popular Choices
                         </h3>
-                        <div className="flex flex-wrap justify-center gap-3 mb-6">
+                        <div className="flex flex-wrap justify-center gap-3 mb-6 max-w-xl mx-auto">
                           {genreConfig.core.map(genre => (
                             <Button
                               key={genre}
@@ -330,8 +408,8 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
                     <h3 className="text-sm font-semibold text-muted-foreground mb-4 uppercase tracking-wider">
                       Themes
                     </h3>
-                    <div className="flex flex-wrap justify-center gap-3 mb-6">
-                      {keywordSuggestions?.map(keyword => (
+                    <div className="flex flex-wrap justify-center gap-3 mb-6 max-w-xl mx-auto">
+                      {(keywordSuggestions ?? []).slice(0, 6).map(keyword => (
                         <Button
                           key={keyword}
                           variant={answers.keywords?.includes(keyword) ? 'pillActive' : 'pill'}
@@ -356,9 +434,6 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
                           {sourceMaterialInfo.label}
                         </Button>
                       </div>
-                      {sourceMaterialInfo.description && (
-                        <p className="text-xs text-muted-foreground mt-2">{sourceMaterialInfo.description}</p>
-                      )}
                     </div>
                   )}
                   {keywordSuggestions && keywordSuggestions.length === 0 && !sourceMaterialInfo && (
@@ -408,7 +483,9 @@ export function Questionnaire({ onComplete }: QuestionnaireProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="flex justify-center"
+          className={`flex justify-center ${
+            (step === 'genres' && showExtendedGenres) || step === 'keywords' ? 'mt-8' : ''
+          }`}
         >
           <Button
             variant="landing"

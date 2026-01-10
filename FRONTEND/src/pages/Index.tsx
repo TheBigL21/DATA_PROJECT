@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Landing } from '@/components/Landing';
 import { Questionnaire } from '@/components/Questionnaire';
@@ -7,11 +7,26 @@ import { QuestionnaireAnswers } from '@/lib/movieData';
 
 type AppState = 'landing' | 'questionnaire' | 'recommendations';
 
+const DEFAULT_USER_ID = 1000; // Default user when skipping
+
 const Index = () => {
   const [appState, setAppState] = useState<AppState>('landing');
   const [answers, setAnswers] = useState<QuestionnaireAnswers | null>(null);
+  const [userId, setUserId] = useState<number>(() => {
+    // Try to load from localStorage, fallback to default
+    const stored = localStorage.getItem('userId');
+    return stored ? parseInt(stored, 10) : DEFAULT_USER_ID;
+  });
 
-  const handleStart = () => {
+  // Persist userId to localStorage when it changes
+  useEffect(() => {
+    if (userId) {
+      localStorage.setItem('userId', userId.toString());
+    }
+  }, [userId]);
+
+  const handleStart = (selectedUserId: number) => {
+    setUserId(selectedUserId);
     setAppState('questionnaire');
   };
 
@@ -23,6 +38,7 @@ const Index = () => {
   const handleRestart = () => {
     setAnswers(null);
     setAppState('landing');
+    // Keep userId on restart (don't clear localStorage)
   };
 
   return (
@@ -60,7 +76,7 @@ const Index = () => {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
           >
-            <Recommendations answers={answers} onRestart={handleRestart} />
+            <Recommendations answers={answers} userId={userId} onRestart={handleRestart} />
           </motion.div>
         )}
       </AnimatePresence>

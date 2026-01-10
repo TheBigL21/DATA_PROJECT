@@ -124,6 +124,55 @@ class PersistentFeedbackLearner:
             ON selection_movie_compatibility(movie_id)
         """)
         
+        # Create users table (for login/signup tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                display_code TEXT UNIQUE NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Ensure default user 1000 exists
+        cursor.execute("""
+            INSERT OR IGNORE INTO users (user_id, display_code)
+            VALUES (1000, '1000')
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_display_code 
+            ON users(display_code)
+        """)
+        
+        # Create global_context_movie_fit table (across all users, no user_id)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS global_context_movie_fit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                selection_signature TEXT NOT NULL,
+                movie_id INTEGER NOT NULL,
+                shown_count INTEGER DEFAULT 0,
+                yes_count INTEGER DEFAULT 0,
+                no_count INTEGER DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(selection_signature, movie_id)
+            )
+        """)
+        
+        # Create indexes for global context fit table
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_global_fit_selection 
+            ON global_context_movie_fit(selection_signature)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_global_fit_movie 
+            ON global_context_movie_fit(movie_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_global_fit_selection_movie 
+            ON global_context_movie_fit(selection_signature, movie_id)
+        """)
+        
         conn.commit()
         conn.close()
     
@@ -187,9 +236,18 @@ class PersistentFeedbackLearner:
         # Update user preferences (async or batch - can be optimized)
         self._update_user_preferences(user_id)
         
-        # Update compatibility score for this selection-movie combination
+        # Update compatibility score for this selection-movie combination (per-user)
         self.update_compatibility_score(
             user_id=user_id,
+            movie_id=movie_id,
+            genres=context.get('genres', []),
+            era=context.get('era', 'any'),
+            themes=context.get('themes', []),
+            action=action
+        )
+        
+        # Update global context-movie fit (across all users)
+        self.update_global_context_fit(
             movie_id=movie_id,
             genres=context.get('genres', []),
             era=context.get('era', 'any'),
@@ -249,35 +307,109 @@ class PersistentFeedbackLearner:
         session_id: Optional[str],
         user_history: List[Dict],
         content_similarity_model,
-        graph_model
+        graph_model,
+        current_genres: List[str],
+        current_era: str,
+        min_context_observations: int = 5
     ) -> float:
-        """Get feedback adjustment [-0.10, +0.10] from persistent user history"""
+        """
+        Get feedback adjustment [-0.10, +0.10] from persistent user history.
+        
+        IMPORTANT: Only uses history from the SAME primary context (genres+era).
+        This prevents preference leakage across different genre/era combinations.
+        
+        Args:
+            movie_id: Movie ID to score
+            user_id: User ID
+            session_id: Session ID (optional)
+            user_history: Full user history from database
+            content_similarity_model: Content similarity model
+            graph_model: Graph co-occurrence model
+            current_genres: Current selected genres (for context filtering)
+            current_era: Current selected era (for context filtering)
+            min_context_observations: Minimum interactions in this context before applying adjustment (default: 5)
+        
+        Returns:
+            Adjustment score in [-0.10, +0.10]. Returns 0.0 if insufficient context data.
+        """
         if not user_history:
             return 0.0
+        
+        # Filter history to ONLY items matching current primary context (genres+era)
+        primary_context_sig = self._create_primary_context_signature(current_genres, current_era)
+        
+        context_matched_history = []
+        for item in user_history:
+            # Extract context from history item
+            context = item.get('context', {})
+            item_genres = context.get('genres', []) if isinstance(context, dict) else []
+            item_era = context.get('era', 'any') if isinstance(context, dict) else 'any'
+            
+            # Create signature for this history item
+            item_context_sig = self._create_primary_context_signature(item_genres, item_era)
+            
+            # Only include if contexts match
+            if item_context_sig == primary_context_sig:
+                context_matched_history.append(item)
+        
+        # Minimum observations threshold: need at least N interactions in this context
+        if len(context_matched_history) < min_context_observations:
+            return 0.0  # Not enough data in this context - return neutral
+        
+        # Use all matching history (not just 20) since we've already filtered by context
+        # Limit to 200 most recent to avoid excessive computation
+        recent_feedback = context_matched_history[:200]
+        
+        if not recent_feedback:
+            return 0.0
+        
+        # Bucket weighting parameters
+        BUCKET_SIZE = 20  # Number of interactions per bucket
+        GAMMA = 0.92  # Decay factor per bucket (slight decay, stable preferences)
+        
+        def get_bucket_weight(index: int) -> float:
+            """
+            Compute bucket weight for item at given index.
+            
+            Most recent 20 items (bucket 0): weight = 1.00
+            Next 20 items (bucket 1): weight = 0.92
+            Next 20 items (bucket 2): weight = 0.92^2 = 0.846
+            etc.
+            
+            Args:
+                index: Index in recent_feedback (0 = most recent)
+            
+            Returns:
+                Weight in [0, 1] (decaying with bucket number)
+            """
+            bucket_number = index // BUCKET_SIZE
+            return GAMMA ** bucket_number
         
         boost = 0.0
         penalty = 0.0
         
-        # Get last 20 actions (more than session-only for better learning)
-        recent_feedback = user_history[:20]
+        # Separate liked and rejected for efficient neighbor caching
+        liked_entries = []  # (index, movie_id, action)
+        rejected_entries = []  # (index, movie_id)
         
-        liked_movies = [
-            {'movie_id': f['movie_id'], 'action': f['action']}
-            for f in recent_feedback
-            if f['action'] in ['right', 'up', 'yes', 'final']
-        ]
-        rejected_movies = [
-            f['movie_id'] for f in recent_feedback
-            if f['action'] in ['left', 'no']
-        ]
+        for idx, item in enumerate(recent_feedback):
+            action = item.get('action', '')
+            item_movie_id = item.get('movie_id')
+            
+            if action in ['right', 'up', 'yes', 'final']:
+                liked_entries.append((idx, item_movie_id, action))
+            elif action in ['left', 'no']:
+                rejected_entries.append((idx, item_movie_id))
         
-        # Pre-compute graph neighbors for liked/rejected movies (optimization)
+        if not liked_entries and not rejected_entries:
+            return 0.0
+        
+        # Pre-compute graph neighbors for all liked/rejected movies (use all, not just last 20)
         liked_neighbors_cache = {}
         rejected_neighbors_cache = {}
         
         if graph_model:
-            for entry in liked_movies[-10:]:
-                liked_id = entry['movie_id']
+            for idx, liked_id, action in liked_entries:
                 if liked_id not in liked_neighbors_cache:
                     try:
                         liked_neighbors_cache[liked_id] = dict(
@@ -286,7 +418,7 @@ class PersistentFeedbackLearner:
                     except:
                         liked_neighbors_cache[liked_id] = {}
             
-            for rejected_id in rejected_movies[-10:]:
+            for idx, rejected_id in rejected_entries:
                 if rejected_id not in rejected_neighbors_cache:
                     try:
                         rejected_neighbors_cache[rejected_id] = dict(
@@ -295,10 +427,10 @@ class PersistentFeedbackLearner:
                     except:
                         rejected_neighbors_cache[rejected_id] = {}
         
-        # Calculate similarity to liked movies
-        for entry in liked_movies[-10:]:  # Last 10 liked
-            liked_id = entry['movie_id']
-            action_type = entry['action']
+        # Calculate similarity to liked movies with bucket weighting
+        for idx, liked_id, action_type in liked_entries:
+            # Get bucket weight based on position in recent_feedback
+            weight = get_bucket_weight(idx)
             
             # Compute similarity (60% content, 40% graph)
             sim_content = 0.0
@@ -311,13 +443,19 @@ class PersistentFeedbackLearner:
             sim_graph = liked_neighbors_cache.get(liked_id, {}).get(movie_id, 0.0) if graph_model else 0.0
             sim = 0.6 * sim_content + 0.4 * sim_graph
             
+            # Apply bucket weight to similarity before computing boost
+            weighted_sim = weight * sim
+            
             if action_type in ['right', 'yes']:
-                boost = max(boost, 0.08 * sim)
+                boost = max(boost, 0.08 * weighted_sim)
             elif action_type in ['up', 'final']:
-                boost = max(boost, 0.10 * sim)
+                boost = max(boost, 0.10 * weighted_sim)
         
-        # Calculate similarity to rejected movies
-        for rejected_id in rejected_movies[-10:]:  # Last 10 rejected
+        # Calculate similarity to rejected movies with bucket weighting
+        for idx, rejected_id in rejected_entries:
+            # Get bucket weight based on position in recent_feedback
+            weight = get_bucket_weight(idx)
+            
             sim_content = 0.0
             if content_similarity_model:
                 try:
@@ -328,9 +466,50 @@ class PersistentFeedbackLearner:
             sim_graph = rejected_neighbors_cache.get(rejected_id, {}).get(movie_id, 0.0) if graph_model else 0.0
             sim = 0.6 * sim_content + 0.4 * sim_graph
             
-            penalty = min(penalty, -0.10 * sim)
+            # Apply bucket weight to similarity before computing penalty
+            weighted_sim = weight * sim
+            penalty = min(penalty, -0.10 * weighted_sim)
         
         return np.clip(boost + penalty, -0.10, +0.10)
+    
+    def _create_primary_context_signature(
+        self,
+        genres: List[str],
+        era: str
+    ) -> str:
+        """
+        Create primary context signature (genres + era only).
+        
+        This is used to scope learning adjustments to the same context,
+        preventing preference leakage across different genre/era combinations.
+        
+        Format: "genre1|genre2|era"
+        - Genres sorted alphabetically
+        - Era normalized to lowercase
+        
+        Examples:
+        - genres=["action", "dystopia"], era="new_era"
+          → "action|dystopia|new_era"
+        
+        - genres=["comedy"], era="millennium"
+          → "comedy|millennium"
+        
+        Args:
+            genres: List of genre strings
+            era: Era string ('new_era', 'millennium', etc.)
+            
+        Returns:
+            Primary context signature string
+        """
+        # Sort and normalize genres
+        sorted_genres = sorted([g.lower().strip() for g in genres if g])
+        genre_str = '|'.join(sorted_genres) if sorted_genres else ''
+        
+        # Normalize era
+        era_str = era.lower().strip() if era else 'any'
+        
+        # Combine: genres|era
+        return f"{genre_str}|{era_str}"
     
     def _create_selection_signature(
         self, 
@@ -339,7 +518,7 @@ class PersistentFeedbackLearner:
         themes: List[str]
     ) -> str:
         """
-        Create deterministic signature for selection combination.
+        Create deterministic signature for selection combination (full context).
         
         Format: "genre1|genre2|era|theme1|theme2"
         - Genres sorted alphabetically
@@ -604,6 +783,225 @@ class PersistentFeedbackLearner:
         if row:
             return float(row[0])
         return 0.0  # No data, neutral score
+    
+    def update_global_context_fit(
+        self,
+        movie_id: int,
+        genres: List[str],
+        era: str,
+        themes: List[str],
+        action: str
+    ):
+        """
+        Update global context-movie fit statistics (across all users).
+        
+        This learns which movies work well for which questionnaire contexts
+        based on aggregated YES/NO feedback from all users.
+        
+        Args:
+            movie_id: Movie ID
+            genres: List of genres from selection
+            era: Era from selection
+            themes: List of themes from selection
+            action: User action ('yes', 'no', 'right', 'left', 'up', 'final')
+        """
+        selection_sig = self._create_selection_signature(genres, era, themes)
+        normalized_action = self._normalize_action(action)
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get current stats
+        cursor.execute("""
+            SELECT shown_count, yes_count, no_count
+            FROM global_context_movie_fit
+            WHERE selection_signature = ? AND movie_id = ?
+        """, (selection_sig, movie_id))
+        
+        row = cursor.fetchone()
+        
+        if row:
+            shown_count, yes_count, no_count = row
+        else:
+            shown_count, yes_count, no_count = 0, 0, 0
+        
+        # Update stats based on action
+        new_shown_count = shown_count + 1
+        
+        if normalized_action in ['right', 'up', 'yes', 'final']:
+            # Positive feedback: increment yes_count
+            new_yes_count = yes_count + 1
+            new_no_count = no_count
+        elif normalized_action in ['left', 'no']:
+            # Negative feedback: increment no_count
+            new_yes_count = yes_count
+            new_no_count = no_count + 1
+        else:
+            # Unknown action, only increment shown
+            new_yes_count = yes_count
+            new_no_count = no_count
+        
+        # Update or insert
+        cursor.execute("""
+            INSERT INTO global_context_movie_fit 
+            (selection_signature, movie_id, shown_count, yes_count, no_count, last_updated)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(selection_signature, movie_id) DO UPDATE SET
+                shown_count = ?,
+                yes_count = ?,
+                no_count = ?,
+                last_updated = CURRENT_TIMESTAMP
+        """, (
+            selection_sig, movie_id, new_shown_count, new_yes_count, new_no_count,
+            new_shown_count, new_yes_count, new_no_count
+        ))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_global_context_fit_score(
+        self,
+        movie_id: int,
+        genres: List[str],
+        era: str,
+        themes: List[str],
+        min_observations: int = 5,
+        alpha: float = 2.0,
+        beta: float = 2.0
+    ) -> float:
+        """
+        Get global context-movie fit score (across all users).
+        
+        Uses Beta smoothing to avoid noise from small sample sizes:
+        p = (yes_count + alpha) / (shown_count + alpha + beta)
+        
+        Then converts to adjustment centered at 0:
+        score = p - 0.5  (range [-0.5, +0.5])
+        
+        Args:
+            movie_id: Movie ID
+            genres: List of genres from selection
+            era: Era from selection
+            themes: List of themes from selection
+            min_observations: Minimum shown_count to apply score (default: 5)
+            alpha: Beta prior parameter for smoothing (default: 2.0)
+            beta: Beta prior parameter for smoothing (default: 2.0)
+        
+        Returns:
+            Global fit score in [-0.5, +0.5]
+            - Positive: Movie tends to be liked in this context (across users)
+            - Negative: Movie tends to be rejected in this context (across users)
+            - 0.0: No data or insufficient observations (neutral)
+        """
+        selection_sig = self._create_selection_signature(genres, era, themes)
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT shown_count, yes_count, no_count
+            FROM global_context_movie_fit
+            WHERE selection_signature = ? AND movie_id = ?
+        """, (selection_sig, movie_id))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return 0.0  # No data
+        
+        shown_count, yes_count, no_count = row
+        
+        # Need minimum observations to trust the score
+        if shown_count < min_observations:
+            return 0.0
+        
+        # Beta smoothing: p = (yes + alpha) / (shown + alpha + beta)
+        # This prevents small samples from dominating (e.g., 1 yes out of 1 shown → not 100%)
+        smoothed_probability = (yes_count + alpha) / (shown_count + alpha + beta)
+        
+        # Convert to adjustment centered at 0.5: score = p - 0.5
+        # Range: [0 - 0.5, 1 - 0.5] = [-0.5, +0.5]
+        global_score = smoothed_probability - 0.5
+        
+        return float(global_score)
+    
+    def user_exists(self, user_id: int) -> bool:
+        """Check if a user exists in the users table."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM users WHERE user_id = ?
+        """, (user_id,))
+        
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        return count > 0
+    
+    def get_user_by_display_code(self, display_code: str) -> Optional[int]:
+        """Get user_id by display_code (4-digit string). Returns None if not found."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT user_id FROM users WHERE display_code = ?
+        """, (display_code,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        return int(row[0]) if row else None
+    
+    def create_user(self, user_id: int, display_code: str) -> bool:
+        """
+        Create a new user. Returns True if created, False if already exists.
+        
+        Args:
+            user_id: Internal user ID (4-digit, 1000-9999)
+            display_code: Display code (4-digit string, e.g. "1234")
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO users (user_id, display_code, last_active)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, display_code))
+            conn.commit()
+            conn.close()
+            return True
+        except sqlite3.IntegrityError:
+            # User already exists (user_id or display_code conflict)
+            conn.rollback()
+            conn.close()
+            return False
+    
+    def find_next_available_user_id(self, start_from: int = 1001, max_id: int = 9999) -> Optional[int]:
+        """
+        Find next available user_id in range [start_from, max_id].
+        Returns None if no available ID found.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT user_id FROM users 
+            WHERE user_id >= ? AND user_id <= ?
+            ORDER BY user_id
+        """, (start_from, max_id))
+        
+        existing_ids = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        
+        # Find first gap or next after highest
+        for candidate_id in range(start_from, max_id + 1):
+            if candidate_id not in existing_ids:
+                return candidate_id
+        
+        return None
 
 
 class SmartRecommendationEngine:
@@ -719,38 +1117,29 @@ class SmartRecommendationEngine:
         if source_material is None:
             source_material = 'any'
 
-        # Load user history from database (across all sessions)
-        if self.feedback_learner and user_id:
+        # IMPORTANT: Keep DB history SEPARATE from session_history
+        # session_history = current session only (from frontend)
+        # db_history = persistent history (for context-scoped learning only)
+        db_history = []
+        if self.feedback_learner and user_id is not None:
             try:
                 db_history = self.feedback_learner.get_user_history(
                     user_id=user_id,
-                    session_id=session_id,
-                    limit=50  # Last 50 actions across all sessions
+                    session_id=None,  # Get all sessions, not just current
+                    limit=500  # Increased to 500 for better long-term learning (after context filtering)
                 )
-                # Merge with current session history (current session takes precedence)
-                # Convert db_history format to match session_history format
-                for db_item in db_history:
-                    # Check if not already in session_history (avoid duplicates)
-                    if not any(
-                        sh.get('movie_id') == db_item['movie_id'] and 
-                        sh.get('action') == db_item['action']
-                        for sh in session_history
-                    ):
-                        session_history.append({
-                            'movie_id': db_item['movie_id'],
-                            'action': db_item['action'],
-                            'context': db_item.get('context', {})
-                        })
             except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to load user history from database: {e}")
 
-        # Extract session context
+        # Extract session context (CURRENT SESSION ONLY)
         session_positive = [
             item['movie_id'] for item in session_history
             if item.get('action') in ['right', 'up', 'yes', 'final']
         ]
         already_shown = [item['movie_id'] for item in session_history]
+        
+        # Note: db_history is used separately in _score_candidates_new for context-scoped adjustments
 
         # STAGE 1: Generate candidates
         candidates = self._generate_candidates(
@@ -763,6 +1152,7 @@ class SmartRecommendationEngine:
         )
 
         # STAGE 2: Score all candidates (strict scoring)
+        # Pass db_history separately for context-scoped learning
         scores = self._score_candidates_new(
             candidates=candidates,
             user_id=user_id,
@@ -771,7 +1161,8 @@ class SmartRecommendationEngine:
             source_material=source_material,
             themes=themes,
             session_positive_movies=session_positive,
-            session_history=session_history
+            session_history=session_history,  # Current session only (for session-specific signals)
+            db_history=db_history  # Separate DB history (for context-scoped persistent learning)
         )
 
         # Store strict scores for interactive selector (80/20 split)
@@ -840,7 +1231,9 @@ class SmartRecommendationEngine:
         Generate candidate movies using HARD filtering (strict requirements).
 
         HARD FILTERS (non-negotiable):
-        - Genre: EXACT match required (at least one selected genre)
+        - Genre: 
+          * For 2 genres: Try strict AND (both genres required), fallback to OR (either genre) if no candidates
+          * For 1 genre: EXACT match required
         - Quality: rating >= quality_floor (6.0)
         - Popularity: num_votes >= 5000
         - Era: Movies must be within exact year range (if era != 'any')
@@ -848,16 +1241,8 @@ class SmartRecommendationEngine:
 
         Returns 50-200 high-quality candidates.
         """
-        # HARD FILTER 1: Genre match (case-insensitive)
         genres_lower = [g.lower().strip() for g in genres]
-        def matches_genre(movie_genres):
-            if not isinstance(movie_genres, (list, np.ndarray)):
-                return False
-            movie_genres_lower = [str(g).lower().strip() for g in movie_genres]
-            return any(genre_lower in movie_genres_lower for genre_lower in genres_lower)
         
-        genre_mask = self.movies['genres'].apply(matches_genre)
-
         # HARD FILTER 2: Quality floor (6.0 minimum)
         rating_mask = self.movies['avg_rating'] >= quality_floor
 
@@ -874,11 +1259,49 @@ class SmartRecommendationEngine:
         else:
             era_mask = pd.Series([True] * len(self.movies), index=self.movies.index)
 
-        # Apply all hard filters
-        candidates = self.movies[genre_mask & rating_mask & popularity_mask & era_mask].copy()
-
-        # Remove already shown
-        candidates = candidates[~candidates['movie_id'].isin(already_shown)]
+        # HARD FILTER 1: Genre match (with strict/fallback logic for 2 genres)
+        if len(genres_lower) == 2:
+            # For 2 genres: Try strict AND first (both genres required)
+            g1, g2 = genres_lower[0], genres_lower[1]
+            
+            def matches_both(movie_genres):
+                if not isinstance(movie_genres, (list, np.ndarray)):
+                    return False
+                movie_genres_lower = [str(g).lower().strip() for g in movie_genres]
+                return (g1 in movie_genres_lower) and (g2 in movie_genres_lower)
+            
+            def matches_either(movie_genres):
+                if not isinstance(movie_genres, (list, np.ndarray)):
+                    return False
+                movie_genres_lower = [str(g).lower().strip() for g in movie_genres]
+                return (g1 in movie_genres_lower) or (g2 in movie_genres_lower)
+            
+            # Try strict AND (both genres)
+            genre_mask = self.movies['genres'].apply(matches_both)
+            candidates = self.movies[genre_mask & rating_mask & popularity_mask & era_mask].copy()
+            
+            # Remove already shown
+            candidates = candidates[~candidates['movie_id'].isin(already_shown)]
+            
+            # If no candidates left after removing already_shown, fallback to OR (either genre)
+            if len(candidates) == 0:
+                genre_mask = self.movies['genres'].apply(matches_either)
+                candidates = self.movies[genre_mask & rating_mask & popularity_mask & era_mask].copy()
+                # Remove already shown again with relaxed filter
+                candidates = candidates[~candidates['movie_id'].isin(already_shown)]
+        else:
+            # For single genre: current behavior (exact match)
+            def matches_genre(movie_genres):
+                if not isinstance(movie_genres, (list, np.ndarray)):
+                    return False
+                movie_genres_lower = [str(g).lower().strip() for g in movie_genres]
+                return any(genre_lower in movie_genres_lower for genre_lower in genres_lower)
+            
+            genre_mask = self.movies['genres'].apply(matches_genre)
+            candidates = self.movies[genre_mask & rating_mask & popularity_mask & era_mask].copy()
+            
+            # Remove already shown
+            candidates = candidates[~candidates['movie_id'].isin(already_shown)]
 
         # Limit to top 200 by votes (popularity proxy for quality)
         if len(candidates) > 200:
@@ -1541,7 +1964,8 @@ class SmartRecommendationEngine:
         source_material: str,
         themes: List[str],
         session_positive_movies: List[int],
-        session_history: List[Dict]
+        session_history: List[Dict],
+        db_history: Optional[List[Dict]] = None
     ) -> np.ndarray:
         """
         Score candidates with hybrid ML system.
@@ -1561,11 +1985,13 @@ class SmartRecommendationEngine:
         - Content Similarity (5%):
           + Content Score × 0.05 (if available, else 0.0)
         - Feedback Adjustment (±10%):
-          + Context-Specific Feedback ±10%
+          + User-specific feedback ±10%
         - Selection-Movie Compatibility (±5%):
-          + Compatibility Score × 0.05 (context-specific learning)
+          + User-Context Compatibility × 0.05 (per-user, context-specific)
+        - Global Context Fit (±5%):
+          + Global Context-Movie Fit × 0.05 (across all users, context-specific)
         
-        Final Score = Base Score + Feedback Adjustment + Compatibility Adjustment
+        Final Score = Base Score + Feedback Adjustment + Compatibility Adjustment + Global Fit Adjustment
         """
         num_candidates = len(candidates)
         scores = np.zeros(num_candidates)
@@ -1621,18 +2047,21 @@ class SmartRecommendationEngine:
             base_score = explicit_score + ml_score + content_score
             
             # FEEDBACK ADJUSTMENT (±10%)
-            # Get feedback adjustment from persistent learner (uses cross-session history)
+            # Get feedback adjustment from persistent learner (context-scoped to current genres+era)
             feedback_adjustment = 0.0
-            if self.feedback_learner:
+            if self.feedback_learner and db_history is not None:
                 try:
                     graph_model = getattr(self.base_engine, 'graph', None)
                     feedback_adjustment = self.feedback_learner.get_adjustment(
                         movie_id=movie_id,
                         user_id=user_id,
-                        session_id=None,  # Will load from session_history if needed
-                        user_history=session_history,  # Includes cross-session history
+                        session_id=None,
+                        user_history=db_history,  # Use separate DB history (not merged with session)
                         content_similarity_model=self.content_similarity,
-                        graph_model=graph_model
+                        graph_model=graph_model,
+                        current_genres=genres,  # Pass current context for filtering
+                        current_era=era,  # Pass current era for filtering
+                        min_context_observations=5  # Need at least 5 interactions in this context
                     )
                 except Exception as e:
                     logger = logging.getLogger(__name__)
@@ -1657,8 +2086,31 @@ class SmartRecommendationEngine:
                     logger.warning(f"Compatibility score failed for movie {movie_id}: {e}")
                     compatibility_adjustment = 0.0
             
+            # GLOBAL CONTEXT FIT (±5%)
+            # Learn from aggregated feedback across all users for this context
+            global_fit_adjustment = 0.0
+            if self.feedback_learner:
+                try:
+                    global_fit_score = self.feedback_learner.get_global_context_fit_score(
+                        movie_id=movie_id,
+                        genres=genres,
+                        era=era,
+                        themes=themes,
+                        min_observations=5,  # Need at least 5 observations to trust
+                        alpha=2.0,  # Beta smoothing parameters
+                        beta=2.0
+                    )
+                    # Map [-0.5, +0.5] to [-0.05, +0.05] (5% weight, max 10% of range)
+                    # This bounds the adjustment safely
+                    global_fit_adjustment = global_fit_score * 0.10
+                    global_fit_adjustment = np.clip(global_fit_adjustment, -0.05, +0.05)
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Global context fit score failed for movie {movie_id}: {e}")
+                    global_fit_adjustment = 0.0
+            
             # FINAL SCORE
-            scores[idx] = base_score + feedback_adjustment + compatibility_adjustment
+            scores[idx] = base_score + feedback_adjustment + compatibility_adjustment + global_fit_adjustment
             scores[idx] = np.clip(scores[idx], 0.0, 1.0)  # Clamp to [0, 1]
         
         return scores
@@ -1708,6 +2160,7 @@ def load_smart_system(
         keyword_analyzer = KeywordAnalyzer.load(keyword_db_path)
 
     # Load Content Similarity model if available (optional)
+    # Auto-train on first run if missing
     content_similarity = None
     content_sim_path = models_dir / 'content_similarity.pkl'
     logger = logging.getLogger(__name__)
@@ -1718,7 +2171,24 @@ def load_smart_system(
         except Exception as e:
             logger.warning(f"Could not load ContentSimilarity model: {e}")
     else:
-        logger.info("Content Similarity model not found (optional) - continuing without it")
+        # Auto-train content similarity if movies.parquet exists (first-run cache)
+        if movies_path.exists():
+            logger.info("Content Similarity model not found -> training now (first-run cache)...")
+            try:
+                from src.models.content_similarity import train_content_similarity
+                train_content_similarity(movies_path, models_dir)
+                logger.info("✓ ContentSimilarity trained and saved")
+                # Now try to load it
+                try:
+                    content_similarity = ContentSimilarity.load(models_dir)
+                    logger.info("Content Similarity model loaded successfully")
+                except Exception as e:
+                    logger.warning(f"Could not load newly trained ContentSimilarity model: {e}")
+            except Exception as e:
+                logger.warning(f"Content similarity training failed: {e}")
+                logger.warning("Continuing without content similarity (optional component)")
+        else:
+            logger.info("Content Similarity model not found and movies.parquet missing - continuing without it")
 
     # Set default feedback database path if not provided
     if feedback_db_path is None:

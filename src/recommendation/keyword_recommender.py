@@ -26,7 +26,12 @@ class KeywordRecommender:
         self.genre_keywords = self._build_genre_keyword_map()
 
     def _build_genre_keyword_map(self) -> Dict[str, Counter]:
-        """Build map of genres to keyword frequencies"""
+        """
+        Build map of genres to keyword frequencies.
+        
+        IMPORTANT: Normalizes genre keys to lowercase to ensure consistent matching.
+        This fixes issues where dataset has "Sci-Fi" but query uses "sci-fi".
+        """
         import numpy as np
         genre_keywords = {}
 
@@ -40,9 +45,16 @@ class KeywordRecommender:
             genres = list(row['genres']) if isinstance(row['genres'], (list, tuple, np.ndarray)) else []
 
             for genre in genres:
-                if genre not in genre_keywords:
-                    genre_keywords[genre] = Counter()
-                genre_keywords[genre].update(keywords)
+                # Normalize genre key (lowercase, strip) for consistent matching
+                genre_normalized = str(genre).lower().strip()
+                if genre_normalized:
+                    if genre_normalized not in genre_keywords:
+                        genre_keywords[genre_normalized] = Counter()
+                    # Also normalize keywords before adding
+                    for kw in keywords:
+                        kw_clean = str(kw).lower().strip()
+                        if kw_clean:
+                            genre_keywords[genre_normalized][kw_clean] += 1
 
         return genre_keywords
 

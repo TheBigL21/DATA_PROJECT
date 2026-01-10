@@ -3,7 +3,7 @@
   <img src="data/images/1rst%20interface.png" alt="Movie Finder - interface preview" width="900">
 </p>
 
-## Movie Finder — Hybrid Movie Recommendation System (Full-Stack)
+## Movie Finder — Hybrid Movie Recommendation System 
 
 ### Quick intro
 If you’ve ever opened Netflix (or any streaming platform), scrolled for 15 minutes, and still felt undecided… that’s exactly the moment we built **Movie Finder** for.  
@@ -23,7 +23,7 @@ The idea is simple: **you tell the system what kind of evening you want**, and i
 
 ---
 
-## What’s included in this repo (for grading)
+## What’s included in this repo 
 To make evaluation easy, the runtime artifacts are included directly in the repository under `data/` (around ~73MB).  
 That means **you can run the project without downloading large datasets**.
 
@@ -67,7 +67,8 @@ npm run dev
   <tr>
     <td width="58%" valign="top">
       <p>
-        Start by answering the questionnaire (intent → genres → era → optional themes).<br><br>
+        Start by answering the questionnaire 
+        (intent → genres → era → optional themes).<br><br>
         Then you can <b>swipe through recommendations</b> until you find a movie you actually want to watch.<br><br>
         Feedback is stored locally in <code>data/feedback.db</code>.
       </p>

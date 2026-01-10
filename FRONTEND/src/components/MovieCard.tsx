@@ -1,7 +1,8 @@
 import { motion, PanInfo, useMotionValue, useTransform, AnimatePresence } from 'framer-motion';
 import { Movie } from '@/lib/movieData';
-import { Star, Clock, User, ArrowLeft, ArrowRight, ArrowUp } from 'lucide-react';
+import { Star, Clock, User, ArrowLeft, ArrowRight, ArrowUp, BookOpen, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
 
 interface MovieCardProps {
   movie: Movie;
@@ -13,6 +14,7 @@ export function MovieCard({ movie, onSwipe, showHints }: MovieCardProps) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const [showInitialHints, setShowInitialHints] = useState(showHints);
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
   const rotateZ = useTransform(x, [-200, 200], [-15, 15]);
   const opacity = useTransform(
@@ -200,12 +202,12 @@ export function MovieCard({ movie, onSwipe, showHints }: MovieCardProps) {
 
       {/* Card */}
       <motion.div
-        drag
+        drag={!isDescriptionExpanded}
         dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
         dragElastic={0.7}
         onDragEnd={handleDragEnd}
         style={{ x, y, rotateZ, opacity }}
-        whileTap={{ cursor: 'grabbing' }}
+        whileTap={{ cursor: isDescriptionExpanded ? 'default' : 'grabbing' }}
         className="relative bg-card rounded-2xl shadow-elevated overflow-hidden cursor-grab"
       >
         {/* Poster */}
@@ -230,7 +232,7 @@ export function MovieCard({ movie, onSwipe, showHints }: MovieCardProps) {
             </span>
             <div className="flex items-center gap-1 text-accent">
               <Star className="w-4 h-4 fill-current" />
-              <span className="text-sm font-medium">{movie.rating}</span>
+              <span className="text-sm font-medium">{movie.rating.toFixed(2)}</span>
             </div>
           </div>
 
@@ -247,9 +249,27 @@ export function MovieCard({ movie, onSwipe, showHints }: MovieCardProps) {
             </div>
           </div>
 
-          <p className="text-muted-foreground text-sm leading-relaxed line-clamp-3">
-            {movie.description}
-          </p>
+          <div className="relative">
+            <p className={`text-muted-foreground text-sm leading-relaxed ${isDescriptionExpanded ? '' : 'line-clamp-3'}`}>
+              {movie.description}
+            </p>
+            {movie.description && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsDescriptionExpanded(!isDescriptionExpanded);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                className="mt-2 h-auto py-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <BookOpen className="w-3 h-3 mr-1" />
+                {isDescriptionExpanded ? 'Read less' : 'Readme'}
+              </Button>
+            )}
+          </div>
 
           <div className="flex flex-wrap gap-2 mt-4">
             {movie.genres.slice(0, 3).map(genre => (
