@@ -1,0 +1,343 @@
+% Advanced Programming 2025 - Project Report Template
+% HEC Lausanne / UNIL
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+
+% Code listing settings
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    language=Python
+}
+
+\lstset{style=pythonstyle}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Advanced Programming 2025}
+\lhead{Project Report}
+\rfoot{Page \thepage}
+\setlength{\headheight}{14pt}
+
+% Title page information - MODIFY THESE
+\title{%
+    \Large \textbf{Advanced Programming 2025} \\
+    \vspace{0.5cm}
+    \LARGE \textbf{Movie Finder: Hybrid Movie Recommendation System} \\
+    \vspace{0.3cm}
+    \large Final Project Report
+}
+\author{
+    Louis Megow \\
+    \texttt{louis.megow@unil.ch} \\
+    Student ID: 20330023
+}
+\date{01.01.2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+Movie choice is a small decision that frequently becomes a time-consuming search. The difficulty is not the absence of options but the absence of structure for expressing intent: what feels appropriate depends on context (e.g., a date night versus a family setting) and on constraints such as tone, pacing, and perceived quality. This report presents \textit{Movie Finder}, a context-first hybrid movie recommendation system that combines explicit user input with model-based ranking and a persistent feedback loop.
+
+At runtime, the system first enforces strict candidate constraints (genre match, era range, and quality floors based on ratings and vote counts) and then ranks candidates using a hybrid scoring function. The score blends collaborative filtering via implicit matrix factorization, a session-based co-occurrence graph, and optional content similarity computed from TF--IDF representations of descriptions and keywords. A central contribution is persistent learning: swipe feedback is stored in a SQLite database and influences subsequent rankings through bounded, context-scoped adjustments, designed to improve recommendations over time without leaking preferences across unrelated contexts. The system is delivered end-to-end with a Flask backend, a React/TypeScript frontend, and precomputed runtime artifacts for reproducible execution.
+
+\vspace{0.5cm}
+\noindent\textbf{Keywords:} data science, Python, machine learning, recommender systems, hybrid ranking, implicit feedback, matrix factorization, co-occurrence graph, TF--IDF, Flask, React, persistent learning
+
+\newpage
+\tableofcontents
+\newpage
+
+% ================== MAIN CONTENT ==================
+
+\section{Introduction}
+\label{sec:introduction}
+Selecting a movie appears straightforward, yet in practice it often becomes an inefficient search. Contemporary platforms offer large catalogues and sophisticated recommendation pipelines, but they are not always well aligned with situational intent. A viewer’s objective is frequently contextual—``what fits tonight''—rather than a general expression of long-run taste. As a result, even high-quality recommendations can feel unhelpful if they do not reflect the constraints implied by the moment (for example, suitability for a family setting or the desired tone for a date night).
+
+This project presents \textit{Movie Finder}, a context-first movie recommendation system designed to reduce the time needed to converge to an acceptable choice. The system begins with a short questionnaire (evening type, one or two genres, an era, and optional themes). It then returns a ranked list of candidates that satisfy strict quality constraints and supports interaction through a swipe-based feedback loop. Importantly, feedback is persisted across sessions and incorporated into future rankings in a bounded and context-aware manner, so that learning improves the experience while remaining interpretable and stable.
+
+\paragraph{Problem statement.}
+Many recommender systems are optimized for broad engagement objectives and long-run preference modelling. For a context-driven decision, this can produce two issues: (i) results may drift toward generic popularity rather than the user’s explicit intent, and (ii) learning from feedback—when present—may be either too weak to matter or too unconstrained, causing preferences learned in one context to influence unrelated contexts. The goal of this project is therefore to design an end-to-end system that (a) enforces explicit intent and quality through hard constraints, (b) uses model-based signals to rank within the constrained candidate pool, and (c) learns from feedback persistently, but in a bounded and context-scoped way.
+
+\paragraph{Objectives.}
+The project goals are:
+\begin{itemize}
+    \item Build a clean movie dataset from IMDb and enrich it with TMDb metadata (keywords, descriptions, posters) for usability and theme-level matching.
+    \item Implement a hybrid ranking approach combining collaborative filtering, a co-occurrence graph, and optional content similarity, while preserving strict intent and quality constraints.
+    \item Provide a reproducible end-to-end application: Flask API backend and React/TypeScript frontend with a swipe interface.
+    \item Implement persistent learning from user feedback and ensure that learning is scoped to comparable contexts to avoid preference leakage.
+\end{itemize}
+
+
+\section{Research Question \& Literature}
+\label{sec:rq_lit}
+\paragraph{Research question.}
+\textit{How can a movie recommender generate high-quality recommendations that remain aligned with explicit, context-specific user intent (genres, era, themes), while also adapting through user feedback within and across sessions without leaking preferences across unrelated contexts?}
+
+\paragraph{Relevant literature.}
+Recommender systems are often described through three families of approaches: collaborative filtering, content-based methods, and hybrid systems that combine multiple signals \cite{ricci2011}. Collaborative filtering is particularly effective when feedback is implicit (e.g., clicks or likes) and can be modelled through matrix factorization methods that learn latent user/item representations from behavior \cite{hu2008}. Item-to-item methods can also be implemented via similarity graphs, where co-occurrence within sessions yields neighborhood recommendations. Finally, text-based similarity using TF--IDF and cosine similarity provides a lightweight and interpretable way to capture semantic proximity when textual metadata is available.
+
+\paragraph{Project positioning.}
+This project follows a hybrid strategy: strict constraints enforce user intent and quality, while CF, graph-based similarity, and optional content similarity contribute to ranking. The main additional component is persistent learning through a SQLite database, which provides explicit, inspectable adaptation across sessions.
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Data sources and preprocessing}
+\paragraph{IMDb as core.}
+IMDb provides structured movie metadata (year, runtime, genres) and quality signals (ratings and vote counts), as well as cast/crew information. These fields support both filtering and presentation.
+
+\paragraph{TMDb enrichment.}
+TMDb provides descriptions, thematic keywords, and poster/backdrop URLs. This enrichment is essential for (i) theme-aware ranking and (ii) a credible user interface, where users can make decisions based on a short synopsis and visuals.
+
+\paragraph{Stable identifiers.}
+The final movie table assigns an integer \texttt{movie\_id} (0-indexed) and stores it in \texttt{data/processed/movies.parquet}. This mapping is foundational: the collaborative filtering factors and the graph adjacency matrix are indexed by \texttt{movie\_id}. Any mismatch between the parquet table and the model artifacts would invalidate scoring.
+
+\paragraph{From pipeline-first execution to ``quick run''.}
+During development, the system was executed in a pipeline-first manner: data cleaning, TMDb enrichment, and model training produced runtime artifacts under an \texttt{output/} directory. This workflow is appropriate for development, but it is not ideal for evaluation because TMDb enrichment is constrained by \emph{API rate limiting} and can require several hours for the full dataset. For the final submission, I therefore adapted the project to support a ``quick run'' mode: the enriched movie table and trained models are provided as precomputed artifacts under \texttt{data/}. This allows an evaluator to run the backend and frontend immediately, without requiring a TMDb API key or re-running a long enrichment pipeline.
+
+\subsection{Training setup and synthetic users}
+The system includes collaborative filtering and a co-occurrence graph, both of which require interaction data. Since real interaction logs are not available at project scale, I generated synthetic sessions for approximately 1000 fictive users to train the offline models. This enables a realistic architecture (offline training, online inference) but introduces limitations: cold-start remains significant, learned latent structure reflects the synthetic generator, and evaluation is constrained by the absence of ground-truth satisfaction labels (Section~\ref{sec:results}).
+
+\subsection{Models and scoring (mathematical formulation)}
+Recommendations are generated in two stages: strict candidate generation followed by hybrid scoring.
+
+\paragraph{Candidate generation.}
+Let $C$ denote the candidate set produced by hard constraints. In the current implementation, constraints include:
+\begin{itemize}
+    \item genre match for 1--2 selected genres (with a strict AND attempt for two genres and fallback to OR if needed),
+    \item a minimum average rating threshold (IMDb rating $\ge 6.0$),
+    \item a minimum vote-count threshold (IMDb votes $\ge 5{,}000$),
+    \item an era year-range constraint (unless ``any'' is selected),
+    \item removal of movies already shown in the current session.
+\end{itemize}
+
+\paragraph{Hybrid score.}
+For each $m \in C$, the final score is:
+\[
+S(m) = \mathrm{clip}\Big(S_{\text{base}}(m) + \Delta_{\text{user}}(m) + \Delta_{\text{compat}}(m) + \Delta_{\text{global}}(m),\ 0,\ 1\Big).
+\]
+
+\paragraph{Collaborative filtering (implicit ALS).}
+Offline training produces latent vectors $\mathbf{p}_u, \mathbf{q}_m \in \mathbb{R}^k$, and the CF affinity is:
+\[
+s_{\text{CF}}(u,m) = \mathbf{p}_u^\top \mathbf{q}_m.
+\]
+For integration into the hybrid score, $s_{\text{CF}}$ is mapped to a bounded range.
+
+\paragraph{Co-occurrence graph.}
+Let $w(i,j)$ be the learned edge weight between movies $i$ and $j$. Given the set $P$ of session-positive movies (liked during the current session), the graph score is:
+\[
+s_{\text{graph}}(m) = \max_{p \in P} w(p,m),
+\]
+clipped to $[0,1]$.
+
+\paragraph{Content similarity.}
+If a TF--IDF model is available, each movie is represented by a sparse vector $\mathbf{x}_m$ built from description and keywords. Similarity uses cosine similarity:
+\[
+s_{\text{content}}(m) = \max_{p \in P} \frac{\mathbf{x}_m^\top \mathbf{x}_p}{\|\mathbf{x}_m\|\,\|\mathbf{x}_p\|}.
+\]
+
+\paragraph{Base score.}
+The base score combines explicit intent components with ML signals:
+\[
+S_{\text{base}}(m) =
+w_g s_{\text{genre}}(m) +
+w_e s_{\text{era}}(m) +
+w_t s_{\text{theme}}(m) +
+w_q s_{\text{quality}}(m) +
+w_{cf} s_{\text{CF}}(u,m) +
+w_{gr} s_{\text{graph}}(m) +
+w_{ct} s_{\text{content}}(m),
+\]
+with $\sum w_\cdot = 1$ and $w_{ct}=0$ if content similarity is not available. The weights were tuned iteratively during development to balance intent alignment, stability, and responsiveness to feedback.
+
+\paragraph{Persistent learning adjustments (SQLite-backed).}
+Feedback is persisted in \texttt{data/feedback.db} and influences ranking through bounded adjustments:
+\begin{itemize}
+    \item $\Delta_{\text{user}}(m)$: a bounded user-history adjustment based on similarity to previously liked/rejected items, applied in a context-scoped way (genres + era) to reduce preference leakage.
+    \item $\Delta_{\text{compat}}(m)$: a per-user selection--movie compatibility term using a deterministic context signature $\sigma$ (genres + era + themes) and a compatibility score $\kappa(u,m,\sigma)\in[-1,1]$ scaled to a small adjustment.
+    \item $\Delta_{\text{global}}(m)$: a global context--movie fit term aggregated across users for $(\sigma,m)$, using smoothed YES/NO statistics mapped to a bounded adjustment.
+\end{itemize}
+
+\begin{figure}[h]
+    \centering
+    \textbf{Final Scoring System:}
+    \begin{itemize}
+      \item \textbf{Base Score (100\%)}
+      \begin{itemize}
+        \item \textbf{Explicit Components (70\%)}
+        \begin{itemize}
+          \item Genre Match: 30\%
+          \item Era Match: 15\%
+          \item Keyword Match: 20\%
+          \item Quality: 5\%
+        \end{itemize}
+        \item \textbf{ML Component (15\%)}
+        \begin{itemize}
+          \item Collaborative Filtering: 15\%
+        \end{itemize}
+        \item \textbf{Other Models (15\%)}
+        \begin{itemize}
+          \item Graph Co-occurrence: 10\%
+          \item Content Similarity: 5\%
+        \end{itemize}
+      \end{itemize}
+      \item \textbf{Feedback Adjustments (added to base)}
+      \begin{itemize}
+        \item User-Specific Feedback Adjustment: $\pm$10\% (Context-scoped, same genres+era only)
+        \item Selection-Movie Compatibility: $\pm$5\% (Per-user, per-selection context)
+        \item Global Context Fit: $\pm$5\% (Across all users, per-selection context)
+      \end{itemize}
+    \end{itemize}
+    
+    \textbf{Final Score} = Base Score + Adjustments\\
+    \textbf{Total Adjustment Range:} $[-20\%, +20\%]$
+    \caption{Scoring system structure showing base score components and feedback adjustments.}
+    \label{fig:scoring-system}
+\end{figure}
+
+
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{System architecture (backend + frontend)}
+\paragraph{Backend (Flask).}
+The backend starts via \texttt{python main.py} and loads runtime artifacts from \texttt{data/}: \texttt{data/processed/movies.parquet}, model artifacts in \texttt{data/models/}, and the feedback database \texttt{data/feedback.db} (created if missing). The API exposes endpoints for questionnaire options, recommendations, and feedback persistence, as well as simple signup/login based on a 4-digit code.
+
+\paragraph{Frontend (React/TypeScript).}
+The frontend implements login/signup, the questionnaire, and a swipe-based recommendation view. Swipes are mapped to actions (left $\rightarrow$ no, right $\rightarrow$ yes, up $\rightarrow$ final) and sent back to the backend both to influence within-session ranking and to persist learning across sessions.
+
+\paragraph{Port handoff and local integration.}
+At startup, the backend writes the chosen port to a \texttt{.backend-port} file. The Vite dev server reads this file and proxies \texttt{/api} and \texttt{/health} to the correct port. This removes manual configuration and reduces friction during demonstrations.
+
+\subsection{Challenges solved}
+Two practical issues required iterative refinement. First, features were introduced incrementally (themes, source-material suggestions, persistent learning, and later user IDs), which required aligning frontend/backend schemas and retuning weights to preserve stable behavior. Second, input normalization was necessary to avoid silent failures: user-facing labels did not always match dataset labels, and older contexts could reference labels not present in the filtered dataset. Normalizing inputs at the API boundary improved robustness and reduced empty-result cases.
+
+\section{Codebase \& Reproducibility}
+\label{sec:repro}
+For grading and demonstration, the intended workflow is a quick run using precomputed artifacts under data/. The system can be reproduced by installing backend dependencies (requirements.txt or environment.yml), starting the backend with python main.py, and starting the frontend with npm --prefix frontend run dev. The backend loads precomputed Parquet files (movies, model factors, graph adjacency) and runtime artifacts are verified with python -m src.verify\_runtime\_files.
+
+\section{Results}
+\label{sec:results}
+Given the nature of the project, results are best expressed as system-level outcomes rather than a single predictive accuracy metric. The system achieves intent-aligned recommendations under strict constraints, provides a credible interactive experience, and adapts as feedback accumulates.
+
+\subsection{System overview (runtime artifacts)}
+\begin{table}[H]
+\centering
+\caption{System-level characteristics computed from the packaged runtime artifacts.}
+\label{tab:system_overview}
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Item} & \textbf{Value} \\
+\hline
+Movies in \texttt{movies.parquet} & 67{,}319 \\
+Share with TMDb description & 99.03\% \\
+Share with TMDb keywords & 72.43\% \\
+Feedback events in \texttt{feedback.db} & 160 \\
+\hline
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:system_overview} summarizes the scale of the packaged runtime artifacts used for the quick-run setup. 
+\subsection{What works well}
+\begin{itemize}
+    \item \textbf{Intent alignment and quality.} Hard constraints ensure recommendations remain consistent with selected genres and era and satisfy rating/vote thresholds, which improves user trust.
+    \item \textbf{Hybrid ranking.} Collaborative filtering and graph-based similarity provide complementary ranking signals within the constrained pool; content similarity adds semantic continuity when textual metadata is present.
+    \item \textbf{Persistent adaptation.} Feedback stored in SQLite influences future rankings through bounded, context-scoped adjustments, reducing repeated mismatches for frequently used contexts.
+\end{itemize}
+
+\subsection{Limitations and problematics}
+\begin{itemize}
+    \item \textbf{Cold start.} New users initially receive recommendations driven mainly by explicit constraints and generic priors. Personalization strengthens only after sufficient feedback is collected.
+    \item \textbf{Synthetic training (1000 fictive users).} The CF model is trained on synthetic sessions; therefore, learned latent structure reflects the generator and limits external validity and interpretability of CF-specific effects.
+    \item \textbf{Evaluation limits.} Without ground-truth satisfaction labels and a larger population of real users, evaluation is necessarily qualitative and system-level; standard offline ranking metrics are not meaningful.
+    \item \textbf{User IDs introduced late (limited real-user scale).} Early testing mixed multiple people under a default profile, which made learning noisy. User IDs improved separation, but real-user data remains limited at this stage (Table~\ref{tab:system_overview}), which constrains what can be claimed quantitatively about personalization gains across users.
+    \item \textbf{Practical cold-start behavior.} For a new user with no history, the system still provides usable recommendations because strict candidate constraints enforce intent and quality. However, the learned components become informative only gradually: the session-based signals (graph and optional content similarity) rely on a few positive swipes to create ``anchors,'' and cross-session personalization becomes more stable once the database contains repeated feedback in comparable contexts.
+    \item \textbf{Weighting sensitivity (feedback and model dominance).} The deployed score combines strong explicit intent signals with model-based similarity signals, and then applies bounded feedback adjustments on top. I initially down-weighted genre and era because they are already enforced as hard constraints, but this made the remaining model signals dominate and reduced robustness (especially because collaborative filtering is trained on synthetic interactions). When I instead reduced the model influence, the feedback layer became too strong, increased repetition, and harmed exploration. The final formulation therefore keeps explicit intent as the primary driver and constrains learning to refine ranking rather than determine it.
+\end{itemize}
+
+\newpage
+\section{Conclusion}
+\label{sec:conclusion}
+This project delivers an end-to-end hybrid movie recommendation system with an explicit, context-first interface and persistent learning from feedback. Strict candidate constraints enforce intent and quality, while collaborative filtering, a co-occurrence graph, and optional content similarity provide complementary ranking signals. A key contribution is that adaptation is persistent, bounded, and context-aware through a SQLite-backed feedback learner, making the learning claim concrete and inspectable.
+
+The main limitations follow from the absence of large-scale real interaction data. Training collaborative filtering on synthetic users supports a realistic pipeline but limits what can be claimed about personalization quality. Future work should focus on collecting real user feedback at larger scale, improving cold-start personalization (e.g., lightweight onboarding), and introducing systematic evaluation once sufficient real interaction logs are available.
+
+\subsection{Future Directions}
+\begin{itemize}
+    \item Collect real interaction data at larger scale and learn weights from usage patterns rather than selecting them heuristically.
+    \item Improve cold-start personalization (e.g., lightweight onboarding or context-specific popularity priors).
+    \item Add a rank-shift plot that compares top-$k$ recommendations before and after a feedback sequence for a fixed context.
+    \item Extend UI/UX and feedback categories while preserving context-scoped learning.
+\end{itemize}
+
+\newpage
+\section*{References}
+\addcontentsline{toc}{section}{References}
+
+\begin{thebibliography}{9}
+\bibitem{ricci2011}
+F. Ricci, L. Rokach, B. Shapira, and P. B. Kantor (eds.). \textit{Recommender Systems Handbook}. Springer, 2011.
+
+\bibitem{hu2008}
+Y. Hu, Y. Koren, and C. Volinsky. Collaborative Filtering for Implicit Feedback Datasets. In \textit{Proceedings of the 2008 IEEE International Conference on Data Mining}, pages 263--272, 2008.
+
+\bibitem{imdbdatasets}
+IMDb Datasets. Available at: \url{https://datasets.imdbws.com/}. Accessed: 2026-01-05.
+
+\bibitem{tmdb}
+The Movie Database (TMDb). Available at: \url{https://www.themoviedb.org/}. Accessed: 2026-01-05.
+\end{thebibliography}
+
+\newpage
+\appendix
+\section{AI tools used (required disclosure)}
+\noindent
+The following AI tools were used during development:
+\begin{itemize}
+    \item \textbf{ChatGPT:} occasional clarification of algorithmic concepts and limited support for documentation wording.
+    \item \textbf{Claude Code:} coding assistance for refactoring and debugging, especially for backend/frontend integration and request/response schema alignment.
+    \item \textbf{Lovable:} initial UI draft generation for the frontend, later adapted and integrated manually.
+\end{itemize}
+
+\end{document}
