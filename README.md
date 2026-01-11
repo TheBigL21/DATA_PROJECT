@@ -125,5 +125,3 @@ repo-root/
 ## Optional: rebuild data/models (not required for the demo)
 There is a full pipeline that can rebuild the dataset and retrain models, but it’s slow (hours) and requires downloading IMDb files + a TMDb API key.  
 For grading/demo, the intended path is using the included `data/` artifacts.
-
-Louis Megow
