@@ -31,7 +31,8 @@ REPO_ROOT = Path(__file__).parent.parent
 from src.recommendation.smart_engine import load_smart_system  # type: ignore
 from src.recommendation.time_period_filter import TimePeriodFilter  # type: ignore
 from src.recommendation.source_material_filter import SourceMaterialFilter  # type: ignore
-from src.recommendation.keyword_recommender import KeywordRecommender  # type: ignore  
+from src.recommendation.keyword_recommender import KeywordRecommender  # type: ignore
+from src.recommendation.keyword_filter import KeywordFilter  # type: ignore  
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -296,7 +297,7 @@ def generate_keywords():
         # Normalize genres (aliases + lowercase) for consistent matching
         genres_normalized, raw_genres = _normalize_genres(genres)
 
-        # Prefer engine.keyword_analyzer (rebuilt database) if available
+        # Prefer KeywordRecommender (gives clean filtered list) over keyword_analyzer
         keywords: List[str] = []
 
         # If user selected film-noir, seed noir-like keyword suggestions
@@ -305,30 +306,28 @@ def generate_keywords():
                 if kw not in keywords and len(keywords) < 8:
                     keywords.append(kw)
 
-        if engine.keyword_analyzer:
-            suggested = engine.suggest_keywords(genres_normalized, num_keywords=8)
-            if keywords:
-                # Merge seeded noir keywords + suggested, keep unique, cap at 8
-                merged: List[str] = []
-                for kw in keywords + suggested:
-                    if kw not in merged:
-                        merged.append(kw)
-                    if len(merged) >= 8:
-                        break
-                keywords = merged
-            else:
-                keywords = suggested
-        
-        # Fallback to KeywordRecommender if database didn't return enough keywords
-        if len(keywords) < 4 and keyword_recommender:
-            logger.info(f"KeywordAnalyzer returned {len(keywords)} keywords, falling back to KeywordRecommender")
+        # Use KeywordRecommender first (preferred - gives clean filtered keywords)
+        if keyword_recommender:
             keywords_recommender = keyword_recommender.get_keywords_for_genres(genres_normalized, num_keywords=8)
-            # Merge: prefer database keywords, fill with recommender if needed
+            # Merge with seeded noir keywords if any
             existing = set(keywords)
             for kw in keywords_recommender:
                 if kw not in existing and len(keywords) < 8:
                     keywords.append(kw)
                     existing.add(kw)
+        
+        # Fallback to engine.keyword_analyzer if KeywordRecommender didn't return enough
+        if len(keywords) < 4 and engine.keyword_analyzer:
+            logger.info(f"KeywordRecommender returned {len(keywords)} keywords, falling back to KeywordAnalyzer")
+            suggested = engine.suggest_keywords(genres_normalized, num_keywords=8)
+            existing = set(keywords)
+            for kw in suggested:
+                if kw not in existing and len(keywords) < 8:
+                    keywords.append(kw)
+                    existing.add(kw)
+
+        # Final safety filter: remove excluded keywords even if DB/recommender contains them
+        keywords = [k for k in keywords if KeywordFilter.is_relevant(k)]
 
         # Final fallback: if still empty, try to suggest based on common themes
         if len(keywords) == 0:
@@ -519,6 +518,11 @@ def recommend():
             else:
                 combined_rating = imdb_rating
 
+            # Filter movie keywords to exclude production/technical details
+            raw_keywords = list(movie.get('keywords', [])) if movie.get('keywords') is not None else []
+            filtered_keywords = [str(k).lower().strip() for k in raw_keywords]
+            filtered_keywords = [k for k in filtered_keywords if KeywordFilter.is_relevant(k)]
+            
             rec = {
                 'movie_id': int(movie_id),
                 'title': movie['title'],
@@ -533,7 +537,7 @@ def recommend():
                 'actors': list(movie['actors']) if isinstance(movie['actors'], (list, tuple)) else [],
                 'description': movie.get('description') if pd.notna(movie.get('description')) else None,
                 'poster_url': movie.get('poster_url') if pd.notna(movie.get('poster_url')) else None,
-                'keywords': list(movie.get('keywords', [])) if movie.get('keywords') is not None else []
+                'keywords': filtered_keywords[:12]  # Limit to top 12 for display
             }
             recommendations.append(rec)
 
@@ -577,6 +581,11 @@ def get_movie(movie_id):
         else:
             combined_rating = imdb_rating
 
+        # Filter movie keywords to exclude production/technical details
+        raw_keywords = list(movie.get('keywords', [])) if movie.get('keywords') is not None else []
+        filtered_keywords = [str(k).lower().strip() for k in raw_keywords]
+        filtered_keywords = [k for k in filtered_keywords if KeywordFilter.is_relevant(k)]
+
         result = {
             'movie_id': int(movie_id),
             'title': movie['title'],
@@ -593,7 +602,7 @@ def get_movie(movie_id):
             'description': movie.get('description') if pd.notna(movie.get('description')) else None,
             'poster_url': movie.get('poster_url') if pd.notna(movie.get('poster_url')) else None,
             'backdrop_url': movie.get('backdrop_url') if pd.notna(movie.get('backdrop_url')) else None,
-            'keywords': list(movie.get('keywords', [])) if movie.get('keywords') is not None else [],
+            'keywords': filtered_keywords[:12],  # Limit to top 12 for display
             'budget': float(movie.get('budget', 0)) if pd.notna(movie.get('budget')) else None,
             'revenue': float(movie.get('revenue', 0)) if pd.notna(movie.get('revenue')) else None
         }
